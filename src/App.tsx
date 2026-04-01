@@ -288,10 +288,18 @@ const AIAssistant = () => {
 };
 
 // --- Auth Provider ---
+const DEV_PROFILE: UserProfile = {
+  uid: 'dev-user-id',
+  name: 'Developer',
+  email: 'katendeabdulbaswit@gmail.com',
+  role: 'admin',
+  isApproved: true
+};
+
 const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<UserProfile | null>(DEV_PROFILE);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -312,7 +320,7 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           setProfile(newProfile);
         }
       } else {
-        setProfile(null);
+        setProfile(DEV_PROFILE);
       }
       setLoading(false);
     });
@@ -328,9 +336,10 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const setRole = async (role: UserRole) => {
-    if (!user) return;
     const updatedProfile = { ...profile!, role };
-    await updateDoc(doc(db, 'users', user.uid), { role });
+    if (user) {
+      await updateDoc(doc(db, 'users', user.uid), { role });
+    }
     setProfile(updatedProfile);
   };
 
