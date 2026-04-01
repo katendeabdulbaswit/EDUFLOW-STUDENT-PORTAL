@@ -59,3 +59,10 @@ export interface Announcement {
   targetRole: 'all' | 'student' | 'lecturer';
   createdAt: string;
 }
+
+export interface Enrollment {
+  id: string;
+  studentId: string;
+  courseId: string;
+  enrolledAt: string;
+}

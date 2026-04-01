@@ -72,6 +72,14 @@ service cloud.firestore {
     //   - targetRole: string (required, enum: all, student, lecturer)
     //   - createdAt: timestamp (required)
     //
+    // Collection: enrollments
+    // Document ID: enrollmentId
+    // Fields:
+    //   - id: string (required)
+    //   - studentId: string (required)
+    //   - courseId: string (required)
+    //   - enrolledAt: timestamp (required)
+    //
     // ===============================================================
 
     // ===============================================================
@@ -173,6 +181,12 @@ service cloud.firestore {
       allow create: if (isLecturer() || isAdmin()) && isValidAnnouncement(request.resource.data);
       allow update: if (isAdmin() || (isLecturer() && resource.data.authorId == request.auth.uid)) && isValidAnnouncement(request.resource.data);
       allow delete: if isAdmin() || (isLecturer() && resource.data.authorId == request.auth.uid);
+    }
+
+    match /enrollments/{enrollmentId} {
+      allow read: if isAuthenticated() && (isOwner(resource.data.studentId) || isAdmin() || isLecturer());
+      allow create: if isAuthenticated() && isOwner(request.resource.data.studentId);
+      allow delete: if isAuthenticated() && (isOwner(resource.data.studentId) || isAdmin());
     }
 
     match /test/{docId} {

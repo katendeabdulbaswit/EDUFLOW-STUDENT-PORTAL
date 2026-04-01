@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, Link, useNavigate } f
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db, signInWithGoogle, logout, handleFirestoreError, OperationType } from './firebase';
-import { UserProfile, Course, TimetableEntry, Resource, AttendanceRecord, Result, Announcement, UserRole } from './types';
+import { UserProfile, Course, TimetableEntry, Resource, AttendanceRecord, Result, Announcement, UserRole, Enrollment } from './types';
 import { 
   LayoutDashboard, 
   Calendar, 
@@ -19,7 +19,9 @@ import {
   Edit, 
   CheckCircle, 
   XCircle,
-  Search,
+  Sparkles,
+  Send,
+  Bot,
   ChevronRight,
   User as UserIcon,
   Bell,
@@ -153,7 +155,7 @@ const Select = ({ className, children, ...props }: React.SelectHTMLAttributes<HT
   </select>
 );
 
-const Badge = ({ children, variant = 'default' }: { children: React.ReactNode; variant?: 'default' | 'success' | 'warning' | 'danger' }) => {
+const Badge = ({ children, variant = 'default', className }: { children: React.ReactNode; variant?: 'default' | 'success' | 'warning' | 'danger'; className?: string }) => {
   const variants = {
     default: 'bg-gray-100 text-gray-700',
     success: 'bg-green-100 text-green-700',
@@ -161,9 +163,127 @@ const Badge = ({ children, variant = 'default' }: { children: React.ReactNode; v
     danger: 'bg-red-100 text-red-700',
   };
   return (
-    <span className={cn('inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium', variants[variant])}>
+    <span className={cn('inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium', variants[variant], className)}>
       {children}
     </span>
+  );
+};
+
+// --- AI Assistant ---
+const AIAssistant = () => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [messages, setMessages] = useState<{ role: 'user' | 'ai'; content: string }[]>([]);
+  const [input, setInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, isTyping]);
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isTyping) return;
+
+    const userMsg = input.trim();
+    setInput('');
+    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setIsTyping(true);
+
+    try {
+      const { GoogleGenAI } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+
+      const result = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: [{ role: 'user', parts: [{ text: `You are a helpful university study assistant. Help the student with their query: ${userMsg}` }] }],
+      });
+
+      const response = result.text;
+      setMessages(prev => [...prev, { role: 'ai', content: response || "I'm sorry, I couldn't generate a response." }]);
+    } catch (error) {
+      console.error('AI Error:', error);
+      setMessages(prev => [...prev, { role: 'ai', content: "Sorry, I'm having trouble connecting right now. Please try again later." }]);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="fixed bottom-6 right-6 w-14 h-14 bg-indigo-600 text-white rounded-full shadow-xl flex items-center justify-center hover:bg-indigo-700 transition-all z-40"
+      >
+        {isOpen ? <XCircle size={28} /> : <Sparkles size={28} />}
+      </button>
+
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-24 right-6 w-96 h-[500px] bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden z-40"
+          >
+            <div className="p-4 bg-indigo-600 text-white flex items-center gap-3">
+              <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
+                <Bot size={20} />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm">EduFlow AI Assistant</h3>
+                <p className="text-[10px] text-white/70">Study Guide & Assistance</p>
+              </div>
+            </div>
+
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+              {messages.length === 0 && (
+                <div className="text-center py-10 space-y-2">
+                  <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto">
+                    <Sparkles size={24} />
+                  </div>
+                  <p className="text-sm font-medium text-gray-900">How can I help you today?</p>
+                  <p className="text-xs text-gray-500 px-6">Ask me about your courses, study tips, or any academic questions!</p>
+                </div>
+              )}
+              {messages.map((msg, i) => (
+                <div key={i} className={cn("flex", msg.role === 'user' ? "justify-end" : "justify-start")}>
+                  <div className={cn(
+                    "max-w-[80%] p-3 rounded-2xl text-sm shadow-sm",
+                    msg.role === 'user' ? "bg-indigo-600 text-white rounded-tr-none" : "bg-white text-gray-800 border border-gray-200 rounded-tl-none"
+                  )}>
+                    {msg.content}
+                  </div>
+                </div>
+              ))}
+              {isTyping && (
+                <div className="flex justify-start">
+                  <div className="bg-white border border-gray-200 p-3 rounded-2xl rounded-tl-none shadow-sm flex gap-1">
+                    <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce" />
+                    <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce [animation-delay:0.2s]" />
+                    <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce [animation-delay:0.4s]" />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={handleSend} className="p-4 bg-white border-t border-gray-100 flex gap-2">
+              <Input
+                placeholder="Type your question..."
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                className="flex-1"
+              />
+              <Button type="submit" size="sm" disabled={isTyping}>
+                <Send size={18} />
+              </Button>
+            </form>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   );
 };
 
@@ -226,6 +346,9 @@ const Sidebar = () => {
   const { profile, signOut } = useAuth();
   const location = window.location.pathname;
 
+  const developerEmail = 'katendeabdulbaswit@gmail.com';
+  const isDeveloper = profile?.email === developerEmail;
+
   const menuItems = {
     student: [
       { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
@@ -235,6 +358,10 @@ const Sidebar = () => {
       { icon: CheckSquare, label: 'Attendance', path: '/attendance' },
       { icon: BarChart3, label: 'Results', path: '/results' },
       { icon: Megaphone, label: 'Announcements', path: '/announcements' },
+      ...(isDeveloper ? [
+        { icon: Plus, label: 'Manage Courses (Dev)', path: '/courses' },
+        { icon: FileText, label: 'Manage Resources (Dev)', path: '/resources' },
+      ] : [])
     ],
     lecturer: [
       { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
@@ -254,7 +381,11 @@ const Sidebar = () => {
     ],
   };
 
-  const roleItems = profile ? menuItems[profile.role] : [];
+  const roleItems = profile ? (
+    (profile.role === 'lecturer' && !profile.isApproved && !isDeveloper)
+      ? [{ icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' }] 
+      : menuItems[profile.role]
+  ) : [];
 
   return (
     <div className="w-64 bg-white border-r border-gray-200 h-screen flex flex-col fixed left-0 top-0">
@@ -1015,8 +1146,11 @@ const CoursesPage = () => {
   const { profile } = useAuth();
   const [courses, setCourses] = useState<Course[]>([]);
   const [lecturers, setLecturers] = useState<UserProfile[]>([]);
+  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
+  const [students, setStudents] = useState<UserProfile[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newCourse, setNewCourse] = useState<Partial<Course>>({});
+  const [viewingStudentsFor, setViewingStudentsFor] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubCourses = onSnapshot(collection(db, 'courses'), (snapshot) => {
@@ -1025,9 +1159,17 @@ const CoursesPage = () => {
     const unsubLecturers = onSnapshot(query(collection(db, 'users'), where('role', '==', 'lecturer')), (snapshot) => {
       setLecturers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as UserProfile)));
     });
+    const unsubStudents = onSnapshot(query(collection(db, 'users'), where('role', '==', 'student')), (snapshot) => {
+      setStudents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as UserProfile)));
+    });
+    const unsubEnrollments = onSnapshot(collection(db, 'enrollments'), (snapshot) => {
+      setEnrollments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Enrollment)));
+    });
     return () => {
       unsubCourses();
       unsubLecturers();
+      unsubStudents();
+      unsubEnrollments();
     };
   }, []);
 
@@ -1049,10 +1191,32 @@ const CoursesPage = () => {
     }
   };
 
+  const toggleEnrollment = async (courseId: string) => {
+    if (!profile) return;
+    const existing = enrollments.find(e => e.courseId === courseId && e.studentId === profile.uid);
+    if (existing) {
+      await deleteDoc(doc(db, 'enrollments', existing.id));
+    } else {
+      const docRef = await addDoc(collection(db, 'enrollments'), {
+        studentId: profile.uid,
+        courseId,
+        enrolledAt: new Date().toISOString()
+      });
+      await updateDoc(docRef, { id: docRef.id });
+    }
+  };
+
+  const getEnrolledStudents = (courseId: string) => {
+    const studentIds = enrollments.filter(e => e.courseId === courseId).map(e => e.studentId);
+    return students.filter(s => studentIds.includes(s.uid));
+  };
+
   return (
     <div className="p-8 space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-gray-900">Manage Courses</h2>
+        <h2 className="text-2xl font-bold text-gray-900">
+          {profile?.role === 'admin' ? 'Manage Courses' : profile?.role === 'lecturer' ? 'My Courses' : 'Available Courses'}
+        </h2>
         {profile?.role === 'admin' && (
           <Button onClick={() => setIsModalOpen(true)} className="gap-2">
             <Plus size={18} /> Add Course
@@ -1061,27 +1225,94 @@ const CoursesPage = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {courses.map(course => (
-          <Card key={course.id} className="p-6 relative group">
-            <div className="flex justify-between items-start">
-              <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center mb-4">
-                <BookOpen size={24} />
-              </div>
-              {profile?.role === 'admin' && (
-                <button onClick={() => handleDelete(course.id)} className="p-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Trash2 size={18} />
-                </button>
-              )}
-            </div>
-            <h3 className="text-lg font-bold text-gray-900">{course.name}</h3>
-            <p className="text-sm text-indigo-600 font-medium">{course.code}</p>
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <p className="text-xs text-gray-500 uppercase font-semibold">Lecturer</p>
-              <p className="text-sm text-gray-700">{lecturers.find(l => l.uid === course.lecturerId)?.name || 'Unassigned'}</p>
-            </div>
-          </Card>
-        ))}
+        {courses
+          .filter(c => profile?.role !== 'lecturer' || c.lecturerId === profile.uid)
+          .map(course => {
+            const isEnrolled = enrollments.some(e => e.courseId === course.id && e.studentId === profile?.uid);
+            const enrolledCount = enrollments.filter(e => e.courseId === course.id).length;
+
+            return (
+              <Card key={course.id} className="p-6 relative group">
+                <div className="flex justify-between items-start">
+                  <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center mb-4">
+                    <BookOpen size={24} />
+                  </div>
+                  <div className="flex gap-2">
+                    {profile?.role === 'lecturer' && course.lecturerId === profile.uid && (
+                      <Button variant="ghost" size="sm" onClick={() => setViewingStudentsFor(course.id)}>
+                        <Users size={18} className="text-gray-400 hover:text-indigo-600" />
+                      </Button>
+                    )}
+                    {profile?.role === 'admin' && (
+                      <button onClick={() => handleDelete(course.id)} className="p-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Trash2 size={18} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <h3 className="text-lg font-bold text-gray-900">{course.name}</h3>
+                <p className="text-sm text-indigo-600 font-medium">{course.code}</p>
+                
+                <div className="mt-4 pt-4 border-t border-gray-100 flex justify-between items-end">
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase font-semibold">Lecturer</p>
+                    <p className="text-sm text-gray-700">{lecturers.find(l => l.uid === course.lecturerId)?.name || 'Unassigned'}</p>
+                  </div>
+                  {profile?.role === 'student' && (
+                    <Button 
+                      size="sm" 
+                      variant={isEnrolled ? 'outline' : 'primary'}
+                      onClick={() => toggleEnrollment(course.id)}
+                    >
+                      {isEnrolled ? 'Unenroll' : 'Enroll'}
+                    </Button>
+                  )}
+                  {(profile?.role === 'lecturer' || profile?.role === 'admin') && (
+                    <div className="text-right">
+                      <p className="text-xs text-gray-500 uppercase font-semibold">Students</p>
+                      <p className="text-sm font-bold text-indigo-600">{enrolledCount}</p>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            );
+          })}
       </div>
+
+      {/* Enrolled Students Modal */}
+      <AnimatePresence>
+        {viewingStudentsFor && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="w-full max-w-md">
+              <Card className="p-6">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-bold">Enrolled Students</h3>
+                  <button onClick={() => setViewingStudentsFor(null)} className="text-gray-400 hover:text-gray-600">
+                    <XCircle size={24} />
+                  </button>
+                </div>
+                <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+                  {getEnrolledStudents(viewingStudentsFor).length > 0 ? (
+                    getEnrolledStudents(viewingStudentsFor).map(student => (
+                      <div key={student.uid} className="flex items-center gap-3 p-3 rounded-lg bg-gray-50 border border-gray-100">
+                        <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold">
+                          {student.name.charAt(0)}
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-gray-900">{student.name}</p>
+                          <p className="text-xs text-gray-500">{student.email}</p>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-center text-gray-500 py-8">No students enrolled yet.</p>
+                  )}
+                </div>
+              </Card>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {isModalOpen && (
@@ -1115,6 +1346,324 @@ const CoursesPage = () => {
           </div>
         )}
       </AnimatePresence>
+    </div>
+  );
+};
+
+const UsersPage = () => {
+  const { profile } = useAuth();
+  const [users, setUsers] = useState<UserProfile[]>([]);
+
+  useEffect(() => {
+    if (profile?.role !== 'admin') return;
+    const unsub = onSnapshot(collection(db, 'users'), (snapshot) => {
+      setUsers(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as unknown as UserProfile)));
+    });
+    return unsub;
+  }, [profile]);
+
+  const handleUpdateRole = async (uid: string, newRole: UserRole) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { role: newRole });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'users');
+    }
+  };
+
+  const handleDeleteUser = async (uid: string) => {
+    if (confirm('Are you sure you want to delete this user?')) {
+      try {
+        await deleteDoc(doc(db, 'users', uid));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, 'users');
+      }
+    }
+  };
+
+  if (profile?.role !== 'admin') return <div className="p-8">Access Denied</div>;
+
+  return (
+    <div className="p-8 space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-900">User Management</h2>
+      </div>
+
+      <Card>
+        <table className="w-full text-left">
+          <thead className="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Name</th>
+              <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Email</th>
+              <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</th>
+              <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+              <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {users.map(u => (
+              <tr key={u.uid}>
+                <td className="px-6 py-4 text-sm font-medium text-gray-900">{u.name}</td>
+                <td className="px-6 py-4 text-sm text-gray-500">{u.email}</td>
+                <td className="px-6 py-4 text-sm text-gray-500">
+                  <Select 
+                    className="w-32 py-1" 
+                    value={u.role} 
+                    onChange={e => handleUpdateRole(u.uid, e.target.value as UserRole)}
+                  >
+                    <option value="student">Student</option>
+                    <option value="lecturer">Lecturer</option>
+                    <option value="admin">Admin</option>
+                  </Select>
+                </td>
+                <td className="px-6 py-4 text-sm">
+                  <Badge variant={u.isApproved ? 'success' : 'warning'}>
+                    {u.isApproved ? 'Approved' : 'Pending'}
+                  </Badge>
+                </td>
+                <td className="px-6 py-4 text-right">
+                  <button onClick={() => handleDeleteUser(u.uid)} className="text-red-600 hover:text-red-900">
+                    <Trash2 size={18} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+};
+
+const ApprovalsPage = () => {
+  const { profile } = useAuth();
+  const [pendingUsers, setPendingUsers] = useState<UserProfile[]>([]);
+
+  useEffect(() => {
+    if (profile?.role !== 'admin') return;
+    const q = query(collection(db, 'users'), where('isApproved', '==', false), where('role', '==', 'lecturer'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      setPendingUsers(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as unknown as UserProfile)));
+    });
+    return unsub;
+  }, [profile]);
+
+  const handleApprove = async (uid: string) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { isApproved: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'users');
+    }
+  };
+
+  const handleReject = async (uid: string) => {
+    if (confirm('Reject this lecturer?')) {
+      try {
+        await deleteDoc(doc(db, 'users', uid));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, 'users');
+      }
+    }
+  };
+
+  if (profile?.role !== 'admin') return <div className="p-8">Access Denied</div>;
+
+  return (
+    <div className="p-8 space-y-6">
+      <h2 className="text-2xl font-bold text-gray-900">Lecturer Approvals</h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {pendingUsers.map(u => (
+          <Card key={u.uid} className="p-6">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xl">
+                {u.name.charAt(0)}
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900">{u.name}</h3>
+                <p className="text-sm text-gray-500">{u.email}</p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1 text-red-600" onClick={() => handleReject(u.uid)}>Reject</Button>
+              <Button className="flex-1" onClick={() => handleApprove(u.uid)}>Approve</Button>
+            </div>
+          </Card>
+        ))}
+        {pendingUsers.length === 0 && (
+          <div className="col-span-full text-center py-20">
+            <p className="text-gray-500 italic">No pending approvals at the moment.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const AnalyticsPage = () => {
+  const { profile } = useAuth();
+  const [stats, setStats] = useState({
+    students: 0,
+    lecturers: 0,
+    courses: 0,
+    enrollments: 0
+  });
+
+  useEffect(() => {
+    if (profile?.role !== 'admin') return;
+    
+    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+      const users = snapshot.docs.map(doc => doc.data());
+      setStats(prev => ({
+        ...prev,
+        students: users.filter(u => u.role === 'student').length,
+        lecturers: users.filter(u => u.role === 'lecturer').length
+      }));
+    });
+
+    const unsubCourses = onSnapshot(collection(db, 'courses'), (snapshot) => {
+      setStats(prev => ({ ...prev, courses: snapshot.size }));
+    });
+
+    const unsubEnrollments = onSnapshot(collection(db, 'enrollments'), (snapshot) => {
+      setStats(prev => ({ ...prev, enrollments: snapshot.size }));
+    });
+
+    return () => {
+      unsubUsers();
+      unsubCourses();
+      unsubEnrollments();
+    };
+  }, [profile]);
+
+  if (profile?.role !== 'admin') return <div className="p-8">Access Denied</div>;
+
+  const chartData = [
+    { name: 'Students', value: stats.students },
+    { name: 'Lecturers', value: stats.lecturers },
+    { name: 'Courses', value: stats.courses },
+    { name: 'Enrollments', value: stats.enrollments }
+  ];
+
+  return (
+    <div className="p-8 space-y-8">
+      <h2 className="text-2xl font-bold text-gray-900">System Analytics</h2>
+      
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <Card className="p-6">
+          <p className="text-sm text-gray-500 mb-1">Total Students</p>
+          <p className="text-3xl font-bold text-indigo-600">{stats.students}</p>
+        </Card>
+        <Card className="p-6">
+          <p className="text-sm text-gray-500 mb-1">Total Lecturers</p>
+          <p className="text-3xl font-bold text-purple-600">{stats.lecturers}</p>
+        </Card>
+        <Card className="p-6">
+          <p className="text-sm text-gray-500 mb-1">Active Courses</p>
+          <p className="text-3xl font-bold text-blue-600">{stats.courses}</p>
+        </Card>
+        <Card className="p-6">
+          <p className="text-sm text-gray-500 mb-1">Total Enrollments</p>
+          <p className="text-3xl font-bold text-green-600">{stats.enrollments}</p>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold mb-6">Distribution Overview</h3>
+          <div className="h-80">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="name" />
+                <YAxis />
+                <Tooltip />
+                <Bar dataKey="value" fill="#4f46e5" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold mb-6">Growth Indicators</h3>
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Student to Lecturer Ratio</p>
+                <p className="text-xs text-gray-500">Ideal range: 15:1 - 25:1</p>
+              </div>
+              <p className="text-xl font-bold text-indigo-600">
+                {stats.lecturers > 0 ? (stats.students / stats.lecturers).toFixed(1) : 'N/A'}:1
+              </p>
+            </div>
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Avg Enrollments per Course</p>
+                <p className="text-xs text-gray-500">Student engagement metric</p>
+              </div>
+              <p className="text-xl font-bold text-green-600">
+                {stats.courses > 0 ? (stats.enrollments / stats.courses).toFixed(1) : 'N/A'}
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+const SettingsPage = () => {
+  const { profile } = useAuth();
+  const [name, setName] = useState(profile?.name || '');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profile) return;
+    setIsSaving(true);
+    try {
+      await updateDoc(doc(db, 'users', profile.uid), { name });
+      alert('Profile updated successfully!');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'users');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="p-8 max-w-2xl mx-auto">
+      <h2 className="text-2xl font-bold text-gray-900 mb-8">Account Settings</h2>
+      <Card className="p-8">
+        <form onSubmit={handleUpdate} className="space-y-6">
+          <div className="flex items-center gap-6 mb-8">
+            <div className="w-20 h-20 rounded-full bg-indigo-600 flex items-center justify-center text-white text-3xl font-bold">
+              {profile?.name.charAt(0)}
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-gray-900">{profile?.name}</h3>
+              <p className="text-gray-500">{profile?.email}</p>
+              <Badge className="mt-2" variant="default">{profile?.role.toUpperCase()}</Badge>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+              <Input value={name} onChange={e => setName(e.target.value)} placeholder="Your Name" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+              <Input disabled value={profile?.email} className="bg-gray-50" />
+              <p className="text-xs text-gray-400 mt-1">Email cannot be changed.</p>
+            </div>
+          </div>
+
+          <div className="pt-6 border-t border-gray-100">
+            <Button type="submit" className="w-full" disabled={isSaving}>
+              {isSaving ? 'Saving Changes...' : 'Update Profile'}
+            </Button>
+          </div>
+        </form>
+      </Card>
     </div>
   );
 };
@@ -1209,7 +1758,26 @@ const Dashboard = () => {
   }, [profile]);
 
   if (profile?.role === 'student') return <StudentDashboard announcements={announcements} timetable={timetable} />;
-  if (profile?.role === 'lecturer') return <LecturerDashboard announcements={announcements} />;
+  if (profile?.role === 'lecturer') {
+    if (!profile.isApproved) {
+      return (
+        <div className="p-8 flex flex-col items-center justify-center min-h-[60vh] text-center">
+          <div className="w-20 h-20 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mb-6">
+            <Clock size={40} />
+          </div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Approval Pending</h2>
+          <p className="text-gray-600 max-w-md">
+            Your lecturer account is currently pending approval from the administrator. 
+            Once approved, you will have full access to manage courses, resources, and students.
+          </p>
+          <div className="mt-8 p-4 bg-orange-50 border border-orange-100 rounded-lg text-sm text-orange-700">
+            Current Status: <span className="font-bold">Pending Review</span>
+          </div>
+        </div>
+      );
+    }
+    return <LecturerDashboard announcements={announcements} />;
+  }
   if (profile?.role === 'admin') return <AdminDashboard />;
   return null;
 };
@@ -1326,6 +1894,44 @@ const StudentDashboard = ({ announcements, timetable }: { announcements: Announc
 };
 
 const LecturerDashboard = ({ announcements }: { announcements: Announcement[] }) => {
+  const { profile } = useAuth();
+  const [stats, setStats] = useState({
+    courses: 0,
+    students: 0,
+    resources: 0
+  });
+
+  useEffect(() => {
+    if (profile?.role !== 'lecturer') return;
+
+    const unsubCourses = onSnapshot(query(collection(db, 'courses'), where('lecturerId', '==', profile.uid)), (snapshot) => {
+      setStats(prev => ({ ...prev, courses: snapshot.size }));
+    });
+
+    const unsubResources = onSnapshot(collection(db, 'resources'), (snapshot) => {
+      const resources = snapshot.docs.map(doc => doc.data() as Resource);
+      // This is a bit inefficient but works for now
+      onSnapshot(query(collection(db, 'courses'), where('lecturerId', '==', profile.uid)), (coursesSnapshot) => {
+        const myCourseIds = coursesSnapshot.docs.map(doc => doc.id);
+        setStats(prev => ({ ...prev, resources: resources.filter(r => myCourseIds.includes(r.courseId)).length }));
+      });
+    });
+
+    const unsubEnrollments = onSnapshot(collection(db, 'enrollments'), (snapshot) => {
+      const enrollments = snapshot.docs.map(doc => doc.data() as Enrollment);
+      onSnapshot(query(collection(db, 'courses'), where('lecturerId', '==', profile.uid)), (coursesSnapshot) => {
+        const myCourseIds = coursesSnapshot.docs.map(doc => doc.id);
+        setStats(prev => ({ ...prev, students: enrollments.filter(e => myCourseIds.includes(e.courseId)).length }));
+      });
+    });
+
+    return () => {
+      unsubCourses();
+      unsubResources();
+      unsubEnrollments();
+    };
+  }, [profile]);
+
   return (
     <div className="p-8 space-y-8">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1336,7 +1942,7 @@ const LecturerDashboard = ({ announcements }: { announcements: Announcement[] })
             </div>
           </div>
           <h3 className="text-lg font-semibold mb-1">My Courses</h3>
-          <p className="text-3xl font-bold text-gray-900">4</p>
+          <p className="text-3xl font-bold text-gray-900">{stats.courses}</p>
           <p className="text-sm text-gray-500 mt-1">Active this semester</p>
         </Card>
 
@@ -1347,7 +1953,7 @@ const LecturerDashboard = ({ announcements }: { announcements: Announcement[] })
             </div>
           </div>
           <h3 className="text-lg font-semibold mb-1">Total Students</h3>
-          <p className="text-3xl font-bold text-gray-900">248</p>
+          <p className="text-3xl font-bold text-gray-900">{stats.students}</p>
           <p className="text-sm text-gray-500 mt-1">Across all courses</p>
         </Card>
 
@@ -1358,45 +1964,50 @@ const LecturerDashboard = ({ announcements }: { announcements: Announcement[] })
             </div>
           </div>
           <h3 className="text-lg font-semibold mb-1">Resources</h3>
-          <p className="text-3xl font-bold text-gray-900">32</p>
+          <p className="text-3xl font-bold text-gray-900">{stats.resources}</p>
           <p className="text-sm text-gray-500 mt-1">Uploaded materials</p>
         </Card>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-4">
-          <h2 className="text-lg font-semibold text-gray-900">Upcoming Classes</h2>
-          <Card className="divide-y divide-gray-100">
-            {[1, 2, 3].map(i => (
-              <div key={i} className="p-4 flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-gray-50 rounded-lg flex flex-col items-center justify-center text-gray-500">
-                    <span className="text-xs font-bold uppercase">Wed</span>
-                    <span className="text-lg font-bold">01</span>
+          <h2 className="text-lg font-semibold text-gray-900">Recent Announcements</h2>
+          <div className="space-y-3">
+            {announcements.slice(0, 3).map(ann => (
+              <Card key={ann.id} className="p-4">
+                <div className="flex gap-4">
+                  <div className="w-10 h-10 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-600 flex-shrink-0">
+                    <Megaphone size={18} />
                   </div>
                   <div>
-                    <h4 className="font-medium text-gray-900">Advanced Web Development</h4>
-                    <p className="text-sm text-gray-500">10:00 AM - 12:00 PM • Lab 4</p>
+                    <h4 className="font-medium text-gray-900">{ann.title}</h4>
+                    <p className="text-sm text-gray-500 line-clamp-1">{ann.content}</p>
                   </div>
                 </div>
-                <Button variant="outline" size="sm">Mark Attendance</Button>
-              </div>
+              </Card>
             ))}
-          </Card>
+            {announcements.length === 0 && <p className="text-gray-500 text-center py-8">No announcements yet.</p>}
+          </div>
         </div>
 
         <div className="space-y-4">
           <h2 className="text-lg font-semibold text-gray-900">Quick Actions</h2>
           <div className="grid grid-cols-1 gap-3">
-            <Button className="w-full justify-start gap-3 py-6">
-              <Plus size={20} /> Upload Resource
-            </Button>
-            <Button variant="secondary" className="w-full justify-start gap-3 py-6">
-              <Megaphone size={20} /> Post Announcement
-            </Button>
-            <Button variant="secondary" className="w-full justify-start gap-3 py-6">
-              <Edit size={20} /> Update Results
-            </Button>
+            <Link to="/resources">
+              <Button className="w-full justify-start gap-3 py-6">
+                <Plus size={20} /> Upload Resource
+              </Button>
+            </Link>
+            <Link to="/announcements">
+              <Button variant="secondary" className="w-full justify-start gap-3 py-6">
+                <Megaphone size={20} /> Post Announcement
+              </Button>
+            </Link>
+            <Link to="/results">
+              <Button variant="secondary" className="w-full justify-start gap-3 py-6">
+                <Edit size={20} /> Update Results
+              </Button>
+            </Link>
           </div>
         </div>
       </div>
@@ -1405,6 +2016,45 @@ const LecturerDashboard = ({ announcements }: { announcements: Announcement[] })
 };
 
 const AdminDashboard = () => {
+  const { profile } = useAuth();
+  const [stats, setStats] = useState({
+    users: 0,
+    pending: 0,
+    courses: 0
+  });
+  const [pendingLecturers, setPendingLecturers] = useState<UserProfile[]>([]);
+
+  useEffect(() => {
+    if (profile?.role !== 'admin') return;
+
+    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+      const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+      setStats(prev => ({
+        ...prev,
+        users: snapshot.size,
+        pending: users.filter(u => u.role === 'lecturer' && !u.isApproved).length
+      }));
+      setPendingLecturers(users.filter(u => u.role === 'lecturer' && !u.isApproved).slice(0, 3));
+    });
+
+    const unsubCourses = onSnapshot(collection(db, 'courses'), (snapshot) => {
+      setStats(prev => ({ ...prev, courses: snapshot.size }));
+    });
+
+    return () => {
+      unsubUsers();
+      unsubCourses();
+    };
+  }, [profile]);
+
+  const handleApprove = async (uid: string) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { isApproved: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'users');
+    }
+  };
+
   const data = [
     { name: 'Mon', students: 400, lecturers: 240 },
     { name: 'Tue', students: 300, lecturers: 139 },
@@ -1418,15 +2068,15 @@ const AdminDashboard = () => {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <Card className="p-6">
           <p className="text-sm text-gray-500 mb-1">Total Users</p>
-          <p className="text-2xl font-bold">1,284</p>
+          <p className="text-2xl font-bold">{stats.users}</p>
         </Card>
         <Card className="p-6">
           <p className="text-sm text-gray-500 mb-1">Pending Approvals</p>
-          <p className="text-2xl font-bold text-orange-600">12</p>
+          <p className="text-2xl font-bold text-orange-600">{stats.pending}</p>
         </Card>
         <Card className="p-6">
           <p className="text-sm text-gray-500 mb-1">Active Courses</p>
-          <p className="text-2xl font-bold">86</p>
+          <p className="text-2xl font-bold">{stats.courses}</p>
         </Card>
         <Card className="p-6">
           <p className="text-sm text-gray-500 mb-1">System Health</p>
@@ -1452,25 +2102,28 @@ const AdminDashboard = () => {
         </Card>
 
         <Card className="p-6">
-          <h3 className="text-lg font-semibold mb-4">Pending Lecturer Approvals</h3>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold">Pending Lecturer Approvals</h3>
+            <Link to="/approvals" className="text-sm text-indigo-600 hover:underline">View all</Link>
+          </div>
           <div className="space-y-4">
-            {[1, 2, 3].map(i => (
-              <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+            {pendingLecturers.map(u => (
+              <div key={u.uid} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600">
                     <UserIcon size={18} />
                   </div>
                   <div>
-                    <p className="text-sm font-medium">Dr. Sarah Johnson</p>
-                    <p className="text-xs text-gray-500">s.johnson@uni.edu</p>
+                    <p className="text-sm font-medium">{u.name}</p>
+                    <p className="text-xs text-gray-500">{u.email}</p>
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="ghost" size="sm" className="text-red-600">Reject</Button>
-                  <Button size="sm">Approve</Button>
+                  <Button size="sm" onClick={() => handleApprove(u.uid)}>Approve</Button>
                 </div>
               </div>
             ))}
+            {pendingLecturers.length === 0 && <p className="text-center text-gray-500 py-8">No pending approvals.</p>}
           </div>
         </Card>
       </div>
@@ -1482,6 +2135,26 @@ const AdminDashboard = () => {
 const AppContent = () => {
   const { profile, loading } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const seedDemoCourse = async () => {
+      if (!profile || profile.role !== 'admin') return;
+      
+      const q = query(collection(db, 'courses'), where('code', '==', 'ROB101'));
+      const snapshot = await getDoc(doc(db, 'courses', 'demo-robotics'));
+      
+      if (!snapshot.exists()) {
+        await setDoc(doc(db, 'courses', 'demo-robotics'), {
+          id: 'demo-robotics',
+          name: 'Introduction to Robotics',
+          code: 'ROB101',
+          lecturerId: profile.uid, // Assign to current admin for demo
+          description: 'A foundational course on robotics, covering sensors, actuators, and control systems.'
+        });
+      }
+    };
+    seedDemoCourse();
+  }, [profile]);
 
   if (loading) return <div className="h-screen flex items-center justify-center">Loading...</div>;
 
@@ -1500,13 +2173,14 @@ const AppContent = () => {
           <Route path="/attendance" element={<AttendancePage />} />
           <Route path="/results" element={<ResultsPage />} />
           <Route path="/announcements" element={<AnnouncementsPage />} />
-          <Route path="/users" element={<div className="p-8">Users Management (Coming Soon)</div>} />
-          <Route path="/approvals" element={<div className="p-8">Lecturer Approvals (Coming Soon)</div>} />
-          <Route path="/analytics" element={<div className="p-8">Analytics (Coming Soon)</div>} />
-          <Route path="/settings" element={<div className="p-8">Settings (Coming Soon)</div>} />
+          <Route path="/users" element={<UsersPage />} />
+          <Route path="/approvals" element={<ApprovalsPage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/dashboard" />} />
         </Routes>
         <RoleSwitcher />
+        {profile?.role === 'student' && <AIAssistant />}
       </main>
     </div>
   );
