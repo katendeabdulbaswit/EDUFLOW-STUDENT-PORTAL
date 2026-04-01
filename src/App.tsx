@@ -1,4 +1,4 @@
-import React, { useState, useEffect, createContext, useContext } from 'react';
+import React, { useState, useEffect, createContext, useContext, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useNavigate } from 'react-router-dom';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
@@ -52,6 +52,65 @@ import { twMerge } from 'tailwind-merge';
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+// --- Mock Data for Offline/Demo Mode ---
+const MOCK_DATA = {
+  courses: [
+    { id: 'demo-robotics', name: 'Introduction to Robotics', code: 'ROB101', lecturerId: 'dev-user-id', description: 'A foundational course on robotics, covering sensors, actuators, and control systems.' },
+    { id: 'demo-cs101', name: 'Computer Science 101', code: 'CS101', lecturerId: 'dev-user-id', description: 'Introduction to programming and computer science concepts.' },
+  ],
+  timetable: [
+    { id: 't1', courseId: 'demo-robotics', courseName: 'Introduction to Robotics', day: 'Monday', startTime: '09:00', endTime: '11:00', room: 'Lab 1' },
+    { id: 't2', courseId: 'demo-cs101', courseName: 'Computer Science 101', day: 'Wednesday', startTime: '14:00', endTime: '16:00', room: 'Room 302' },
+  ],
+  announcements: [
+    { id: 'a1', title: 'Welcome to EduFlow', content: 'We are excited to have you here! Explore your courses and timetable.', date: new Date().toISOString(), role: 'all', authorName: 'Admin' },
+    { id: 'a2', title: 'Robotics Lab Maintenance', content: 'The robotics lab will be closed for maintenance this Friday.', date: new Date().toISOString(), role: 'student', authorName: 'Dr. Smith' },
+  ],
+  resources: [
+    { id: 'r1', title: 'Robotics Basics PDF', type: 'pdf', courseId: 'demo-robotics', url: '#', date: new Date().toISOString() },
+    { id: 'r2', title: 'CS101 Lecture 1 Slides', type: 'link', courseId: 'demo-cs101', url: '#', date: new Date().toISOString() },
+  ],
+  results: [
+    { id: 'res1', studentId: 'dev-user-id', courseId: 'demo-robotics', courseName: 'Introduction to Robotics', grade: 'A', score: 92, date: new Date().toISOString() },
+  ],
+  attendance: [
+    { id: 'att1', studentId: 'dev-user-id', courseId: 'demo-robotics', date: new Date().toISOString(), status: 'present' },
+  ],
+  users: [
+    { uid: 'dev-user-id', name: 'Developer', email: 'katendeabdulbaswit@gmail.com', role: 'admin', isApproved: true },
+    { uid: 'student-1', name: 'John Doe', email: 'john@example.com', role: 'student', isApproved: true },
+    { uid: 'student-2', name: 'Jane Doe', email: 'jane@example.com', role: 'student', isApproved: true },
+  ],
+  enrollments: []
+};
+
+const useCollection = <T extends { id?: string; uid?: string }>(collectionName: keyof typeof MOCK_DATA, queryFn?: (data: T[]) => T[]) => {
+  const [data, setData] = useState<T[]>(MOCK_DATA[collectionName] as T[]);
+  const [loading, setLoading] = useState(true);
+  const queryFnRef = useRef(queryFn);
+
+  useEffect(() => {
+    queryFnRef.current = queryFn;
+  }, [queryFn]);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, collectionName), (snapshot) => {
+      if (!snapshot.empty) {
+        const firestoreData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as T));
+        setData(queryFnRef.current ? queryFnRef.current(firestoreData) : firestoreData);
+      }
+      setLoading(false);
+    }, (err) => {
+      console.warn(`Firestore ${collectionName} failed (offline mode):`, err);
+      setData(queryFnRef.current ? queryFnRef.current(MOCK_DATA[collectionName] as T[]) : MOCK_DATA[collectionName] as T[]);
+      setLoading(false);
+    });
+    return unsub;
+  }, [collectionName]);
+
+  return data;
+};
 
 // --- Contexts ---
 interface AuthContextType {
@@ -461,23 +520,10 @@ const Header = ({ title }: { title: string }) => (
 
 const TimetablePage = () => {
   const { profile } = useAuth();
-  const [entries, setEntries] = useState<TimetableEntry[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
+  const entries = useCollection<TimetableEntry>('timetable');
+  const courses = useCollection<Course>('courses');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<Partial<TimetableEntry> | null>(null);
-
-  useEffect(() => {
-    const unsubTimetable = onSnapshot(collection(db, 'timetable'), (snapshot) => {
-      setEntries(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TimetableEntry)));
-    });
-    const unsubCourses = onSnapshot(collection(db, 'courses'), (snapshot) => {
-      setCourses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Course)));
-    });
-    return () => {
-      unsubTimetable();
-      unsubCourses();
-    };
-  }, []);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -614,23 +660,10 @@ const TimetablePage = () => {
 
 const ResourcesPage = () => {
   const { profile } = useAuth();
-  const [resources, setResources] = useState<Resource[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
+  const resources = useCollection<Resource>('resources');
+  const courses = useCollection<Course>('courses');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newResource, setNewResource] = useState<Partial<Resource>>({ type: 'PDF' });
-
-  useEffect(() => {
-    const unsubResources = onSnapshot(collection(db, 'resources'), (snapshot) => {
-      setResources(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Resource)));
-    });
-    const unsubCourses = onSnapshot(collection(db, 'courses'), (snapshot) => {
-      setCourses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Course)));
-    });
-    return () => {
-      unsubResources();
-      unsubCourses();
-    };
-  }, []);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -741,27 +774,10 @@ const ResourcesPage = () => {
 
 const AttendancePage = () => {
   const { profile } = useAuth();
-  const [records, setRecords] = useState<AttendanceRecord[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [students, setStudents] = useState<UserProfile[]>([]);
+  const records = useCollection<AttendanceRecord>('attendance');
+  const courses = useCollection<Course>('courses');
+  const students = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'student'));
   const [selectedCourse, setSelectedCourse] = useState('');
-
-  useEffect(() => {
-    const unsubCourses = onSnapshot(collection(db, 'courses'), (snapshot) => {
-      setCourses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Course)));
-    });
-    const unsubStudents = onSnapshot(query(collection(db, 'users'), where('role', '==', 'student')), (snapshot) => {
-      setStudents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as UserProfile)));
-    });
-    const unsubAttendance = onSnapshot(collection(db, 'attendance'), (snapshot) => {
-      setRecords(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord)));
-    });
-    return () => {
-      unsubCourses();
-      unsubStudents();
-      unsubAttendance();
-    };
-  }, []);
 
   const markAttendance = async (studentId: string, status: 'present' | 'absent') => {
     if (!selectedCourse) return alert('Select a course first');
@@ -888,28 +904,11 @@ const AttendancePage = () => {
 
 const ResultsPage = () => {
   const { profile } = useAuth();
-  const [results, setResults] = useState<Result[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [students, setStudents] = useState<UserProfile[]>([]);
+  const results = useCollection<Result>('results');
+  const courses = useCollection<Course>('courses');
+  const students = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'student'));
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newResult, setNewResult] = useState<Partial<Result>>({});
-
-  useEffect(() => {
-    const unsubResults = onSnapshot(collection(db, 'results'), (snapshot) => {
-      setResults(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Result)));
-    });
-    const unsubCourses = onSnapshot(collection(db, 'courses'), (snapshot) => {
-      setCourses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Course)));
-    });
-    const unsubStudents = onSnapshot(query(collection(db, 'users'), where('role', '==', 'student')), (snapshot) => {
-      setStudents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as UserProfile)));
-    });
-    return () => {
-      unsubResults();
-      unsubCourses();
-      unsubStudents();
-    };
-  }, []);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1022,20 +1021,12 @@ const ResultsPage = () => {
 
 const AnnouncementsPage = () => {
   const { profile } = useAuth();
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const announcements = useCollection<Announcement>('announcements', (data) => 
+    data.filter(ann => ['all', profile?.role || 'student'].includes(ann.targetRole))
+        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+  );
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newAnn, setNewAnn] = useState<Partial<Announcement>>({ targetRole: 'all' });
-
-  useEffect(() => {
-    const q = query(
-      collection(db, 'announcements'),
-      where('targetRole', 'in', ['all', profile?.role || 'student'])
-    );
-    const unsub = onSnapshot(q, (snapshot) => {
-      setAnnouncements(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Announcement)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-    });
-    return unsub;
-  }, [profile]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1153,34 +1144,13 @@ const AnnouncementsPage = () => {
 
 const CoursesPage = () => {
   const { profile } = useAuth();
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [lecturers, setLecturers] = useState<UserProfile[]>([]);
-  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
-  const [students, setStudents] = useState<UserProfile[]>([]);
+  const courses = useCollection<Course>('courses');
+  const lecturers = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'lecturer'));
+  const enrollments = useCollection<Enrollment>('enrollments');
+  const students = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'student'));
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newCourse, setNewCourse] = useState<Partial<Course>>({});
   const [viewingStudentsFor, setViewingStudentsFor] = useState<string | null>(null);
-
-  useEffect(() => {
-    const unsubCourses = onSnapshot(collection(db, 'courses'), (snapshot) => {
-      setCourses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Course)));
-    });
-    const unsubLecturers = onSnapshot(query(collection(db, 'users'), where('role', '==', 'lecturer')), (snapshot) => {
-      setLecturers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as UserProfile)));
-    });
-    const unsubStudents = onSnapshot(query(collection(db, 'users'), where('role', '==', 'student')), (snapshot) => {
-      setStudents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as UserProfile)));
-    });
-    const unsubEnrollments = onSnapshot(collection(db, 'enrollments'), (snapshot) => {
-      setEnrollments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Enrollment)));
-    });
-    return () => {
-      unsubCourses();
-      unsubLecturers();
-      unsubStudents();
-      unsubEnrollments();
-    };
-  }, []);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1361,15 +1331,7 @@ const CoursesPage = () => {
 
 const UsersPage = () => {
   const { profile } = useAuth();
-  const [users, setUsers] = useState<UserProfile[]>([]);
-
-  useEffect(() => {
-    if (profile?.role !== 'admin') return;
-    const unsub = onSnapshot(collection(db, 'users'), (snapshot) => {
-      setUsers(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as unknown as UserProfile)));
-    });
-    return unsub;
-  }, [profile]);
+  const users = useCollection<UserProfile>('users');
 
   const handleUpdateRole = async (uid: string, newRole: UserRole) => {
     try {
@@ -1445,16 +1407,9 @@ const UsersPage = () => {
 
 const ApprovalsPage = () => {
   const { profile } = useAuth();
-  const [pendingUsers, setPendingUsers] = useState<UserProfile[]>([]);
-
-  useEffect(() => {
-    if (profile?.role !== 'admin') return;
-    const q = query(collection(db, 'users'), where('isApproved', '==', false), where('role', '==', 'lecturer'));
-    const unsub = onSnapshot(q, (snapshot) => {
-      setPendingUsers(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as unknown as UserProfile)));
-    });
-    return unsub;
-  }, [profile]);
+  const pendingUsers = useCollection<UserProfile>('users', (data) => 
+    data.filter(u => u.role === 'lecturer' && u.isApproved === false)
+  );
 
   const handleApprove = async (uid: string) => {
     try {
@@ -1509,39 +1464,16 @@ const ApprovalsPage = () => {
 
 const AnalyticsPage = () => {
   const { profile } = useAuth();
-  const [stats, setStats] = useState({
-    students: 0,
-    lecturers: 0,
-    courses: 0,
-    enrollments: 0
-  });
+  const users = useCollection<UserProfile>('users');
+  const courses = useCollection<Course>('courses');
+  const enrollments = useCollection<Enrollment>('enrollments');
 
-  useEffect(() => {
-    if (profile?.role !== 'admin') return;
-    
-    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
-      const users = snapshot.docs.map(doc => doc.data());
-      setStats(prev => ({
-        ...prev,
-        students: users.filter(u => u.role === 'student').length,
-        lecturers: users.filter(u => u.role === 'lecturer').length
-      }));
-    });
-
-    const unsubCourses = onSnapshot(collection(db, 'courses'), (snapshot) => {
-      setStats(prev => ({ ...prev, courses: snapshot.size }));
-    });
-
-    const unsubEnrollments = onSnapshot(collection(db, 'enrollments'), (snapshot) => {
-      setStats(prev => ({ ...prev, enrollments: snapshot.size }));
-    });
-
-    return () => {
-      unsubUsers();
-      unsubCourses();
-      unsubEnrollments();
-    };
-  }, [profile]);
+  const stats = {
+    students: users.filter(u => u.role === 'student').length,
+    lecturers: users.filter(u => u.role === 'lecturer').length,
+    courses: courses.length,
+    enrollments: enrollments.length
+  };
 
   if (profile?.role !== 'admin') return <div className="p-8">Access Denied</div>;
 
@@ -1740,31 +1672,10 @@ const LandingPage = () => {
 
 const Dashboard = () => {
   const { profile } = useAuth();
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [timetable, setTimetable] = useState<TimetableEntry[]>([]);
-
-  useEffect(() => {
-    if (!profile) return;
-    
-    // Fetch announcements
-    const qAnnouncements = query(
-      collection(db, 'announcements'),
-      where('targetRole', 'in', ['all', profile.role])
-    );
-    const unsubAnnouncements = onSnapshot(qAnnouncements, (snapshot) => {
-      setAnnouncements(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Announcement)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'announcements'));
-
-    // Fetch timetable
-    const unsubTimetable = onSnapshot(collection(db, 'timetable'), (snapshot) => {
-      setTimetable(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TimetableEntry)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'timetable'));
-
-    return () => {
-      unsubAnnouncements();
-      unsubTimetable();
-    };
-  }, [profile]);
+  const announcements = useCollection<Announcement>('announcements', (data) => 
+    data.filter(ann => ['all', profile?.role || 'student'].includes(ann.targetRole))
+  );
+  const timetable = useCollection<TimetableEntry>('timetable');
 
   if (profile?.role === 'student') return <StudentDashboard announcements={announcements} timetable={timetable} />;
   if (profile?.role === 'lecturer') {
@@ -1904,42 +1815,15 @@ const StudentDashboard = ({ announcements, timetable }: { announcements: Announc
 
 const LecturerDashboard = ({ announcements }: { announcements: Announcement[] }) => {
   const { profile } = useAuth();
-  const [stats, setStats] = useState({
-    courses: 0,
-    students: 0,
-    resources: 0
-  });
+  const courses = useCollection<Course>('courses', (data) => data.filter(c => c.lecturerId === profile?.uid));
+  const resources = useCollection<Resource>('resources');
+  const enrollments = useCollection<Enrollment>('enrollments');
 
-  useEffect(() => {
-    if (profile?.role !== 'lecturer') return;
-
-    const unsubCourses = onSnapshot(query(collection(db, 'courses'), where('lecturerId', '==', profile.uid)), (snapshot) => {
-      setStats(prev => ({ ...prev, courses: snapshot.size }));
-    });
-
-    const unsubResources = onSnapshot(collection(db, 'resources'), (snapshot) => {
-      const resources = snapshot.docs.map(doc => doc.data() as Resource);
-      // This is a bit inefficient but works for now
-      onSnapshot(query(collection(db, 'courses'), where('lecturerId', '==', profile.uid)), (coursesSnapshot) => {
-        const myCourseIds = coursesSnapshot.docs.map(doc => doc.id);
-        setStats(prev => ({ ...prev, resources: resources.filter(r => myCourseIds.includes(r.courseId)).length }));
-      });
-    });
-
-    const unsubEnrollments = onSnapshot(collection(db, 'enrollments'), (snapshot) => {
-      const enrollments = snapshot.docs.map(doc => doc.data() as Enrollment);
-      onSnapshot(query(collection(db, 'courses'), where('lecturerId', '==', profile.uid)), (coursesSnapshot) => {
-        const myCourseIds = coursesSnapshot.docs.map(doc => doc.id);
-        setStats(prev => ({ ...prev, students: enrollments.filter(e => myCourseIds.includes(e.courseId)).length }));
-      });
-    });
-
-    return () => {
-      unsubCourses();
-      unsubResources();
-      unsubEnrollments();
-    };
-  }, [profile]);
+  const stats = {
+    courses: courses.length,
+    students: enrollments.filter(e => courses.some(c => c.id === e.courseId)).length,
+    resources: resources.filter(r => courses.some(c => c.id === r.courseId)).length
+  };
 
   return (
     <div className="p-8 space-y-8">
@@ -2026,35 +1910,15 @@ const LecturerDashboard = ({ announcements }: { announcements: Announcement[] })
 
 const AdminDashboard = () => {
   const { profile } = useAuth();
-  const [stats, setStats] = useState({
-    users: 0,
-    pending: 0,
-    courses: 0
-  });
-  const [pendingLecturers, setPendingLecturers] = useState<UserProfile[]>([]);
+  const users = useCollection<UserProfile>('users');
+  const courses = useCollection<Course>('courses');
 
-  useEffect(() => {
-    if (profile?.role !== 'admin') return;
-
-    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
-      const users = snapshot.docs.map(doc => doc.data() as UserProfile);
-      setStats(prev => ({
-        ...prev,
-        users: snapshot.size,
-        pending: users.filter(u => u.role === 'lecturer' && !u.isApproved).length
-      }));
-      setPendingLecturers(users.filter(u => u.role === 'lecturer' && !u.isApproved).slice(0, 3));
-    });
-
-    const unsubCourses = onSnapshot(collection(db, 'courses'), (snapshot) => {
-      setStats(prev => ({ ...prev, courses: snapshot.size }));
-    });
-
-    return () => {
-      unsubUsers();
-      unsubCourses();
-    };
-  }, [profile]);
+  const stats = {
+    users: users.length,
+    pending: users.filter(u => u.role === 'lecturer' && !u.isApproved).length,
+    courses: courses.length
+  };
+  const pendingLecturers = users.filter(u => u.role === 'lecturer' && !u.isApproved).slice(0, 3);
 
   const handleApprove = async (uid: string) => {
     try {
