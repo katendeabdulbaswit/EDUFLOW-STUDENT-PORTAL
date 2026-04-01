@@ -1,9 +1,9 @@
 import React, { useState, useEffect, createContext, useContext, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useNavigate } from 'react-router-dom';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, serverTimestamp, getDocs } from 'firebase/firestore';
 import { auth, db, signInWithGoogle, logout, handleFirestoreError, OperationType } from './firebase';
-import { UserProfile, Course, TimetableEntry, Resource, AttendanceRecord, Result, Announcement, UserRole, Enrollment } from './types';
+import { UserProfile, Course, TimetableEntry, Resource, AttendanceRecord, Result, Announcement, UserRole, Enrollment, AppNotification } from './types';
 import { 
   LayoutDashboard, 
   Calendar, 
@@ -27,7 +27,13 @@ import {
   Bell,
   FileText,
   Clock,
-  MapPin
+  MapPin,
+  Search,
+  Filter,
+  Info,
+  Menu,
+  X,
+  Check
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -53,26 +59,39 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+// Safe date formatting
+const safeFormat = (dateStr: string | undefined, formatStr: string) => {
+  if (!dateStr) return 'N/A';
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return 'Invalid Date';
+    return format(date, formatStr);
+  } catch (e) {
+    return 'Error';
+  }
+};
+
 // --- Mock Data for Offline/Demo Mode ---
 const MOCK_DATA = {
   courses: [
-    { id: 'demo-robotics', name: 'Introduction to Robotics', code: 'ROB101', lecturerId: 'dev-user-id', description: 'A foundational course on robotics, covering sensors, actuators, and control systems.' },
-    { id: 'demo-cs101', name: 'Computer Science 101', code: 'CS101', lecturerId: 'dev-user-id', description: 'Introduction to programming and computer science concepts.' },
+    { id: 'demo-robotics', name: 'Introduction to Robotics', code: 'ROB101', lecturerId: 'dev-user-id', description: 'A foundational course on robotics, covering sensors, actuators, and control systems. Students will learn about robot kinematics, dynamics, and basic control algorithms.' },
+    { id: 'demo-cs101', name: 'Computer Science 101', code: 'CS101', lecturerId: 'dev-user-id', description: 'Introduction to programming and computer science concepts. This course covers the basics of Python, data structures, and algorithmic thinking.' },
+    { id: 'demo-ai', name: 'Artificial Intelligence', code: 'AI301', lecturerId: 'student-1', description: 'Exploration of AI techniques including machine learning, neural networks, and natural language processing.' },
   ],
   timetable: [
     { id: 't1', courseId: 'demo-robotics', courseName: 'Introduction to Robotics', day: 'Monday', startTime: '09:00', endTime: '11:00', room: 'Lab 1' },
     { id: 't2', courseId: 'demo-cs101', courseName: 'Computer Science 101', day: 'Wednesday', startTime: '14:00', endTime: '16:00', room: 'Room 302' },
   ],
   announcements: [
-    { id: 'a1', title: 'Welcome to EduFlow', content: 'We are excited to have you here! Explore your courses and timetable.', date: new Date().toISOString(), role: 'all', authorName: 'Admin' },
-    { id: 'a2', title: 'Robotics Lab Maintenance', content: 'The robotics lab will be closed for maintenance this Friday.', date: new Date().toISOString(), role: 'student', authorName: 'Dr. Smith' },
+    { id: 'a1', title: 'Welcome to EduFlow', content: 'We are excited to have you here! Explore your courses and timetable.', createdAt: new Date().toISOString(), targetRole: 'all', authorId: 'dev-user-id' },
+    { id: 'a2', title: 'Robotics Lab Maintenance', content: 'The robotics lab will be closed for maintenance this Friday.', createdAt: new Date().toISOString(), targetRole: 'student', authorId: 'dev-user-id' },
   ],
   resources: [
-    { id: 'r1', title: 'Robotics Basics PDF', type: 'pdf', courseId: 'demo-robotics', url: '#', date: new Date().toISOString() },
-    { id: 'r2', title: 'CS101 Lecture 1 Slides', type: 'link', courseId: 'demo-cs101', url: '#', date: new Date().toISOString() },
+    { id: 'r1', title: 'Robotics Basics PDF', type: 'pdf', courseId: 'demo-robotics', url: '#', uploadedAt: new Date().toISOString() },
+    { id: 'r2', title: 'CS101 Lecture 1 Slides', type: 'link', courseId: 'demo-cs101', url: '#', uploadedAt: new Date().toISOString() },
   ],
   results: [
-    { id: 'res1', studentId: 'dev-user-id', courseId: 'demo-robotics', courseName: 'Introduction to Robotics', grade: 'A', score: 92, date: new Date().toISOString() },
+    { id: 'res1', studentId: 'dev-user-id', courseId: 'demo-robotics', grade: 'A', marks: 92, semester: 'Fall 2025' },
   ],
   attendance: [
     { id: 'att1', studentId: 'dev-user-id', courseId: 'demo-robotics', date: new Date().toISOString(), status: 'present' },
@@ -82,7 +101,8 @@ const MOCK_DATA = {
     { uid: 'student-1', name: 'John Doe', email: 'john@example.com', role: 'student', isApproved: true },
     { uid: 'student-2', name: 'Jane Doe', email: 'jane@example.com', role: 'student', isApproved: true },
   ],
-  enrollments: []
+  enrollments: [],
+  notifications: []
 };
 
 const useCollection = <T extends { id?: string; uid?: string }>(collectionName: keyof typeof MOCK_DATA, queryFn?: (data: T[]) => T[]) => {
@@ -186,8 +206,11 @@ const Button = React.forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HT
   }
 );
 
-const Card = ({ children, className }: { children: React.ReactNode; className?: string }) => (
-  <div className={cn('bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden', className)}>
+const Card = ({ children, className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+  <div 
+    className={cn('bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden', className)}
+    {...props}
+  >
     {children}
   </div>
 );
@@ -196,6 +219,16 @@ const Input = ({ className, ...props }: React.InputHTMLAttributes<HTMLInputEleme
   <input
     className={cn(
       'flex h-10 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50',
+      className
+    )}
+    {...props}
+  />
+);
+
+const Textarea = ({ className, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => (
+  <textarea
+    className={cn(
+      'flex min-h-[80px] w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50',
       className
     )}
     {...props}
@@ -410,7 +443,7 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 };
 
 // --- Layout ---
-const Sidebar = () => {
+const Sidebar = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) => {
   const { profile, signOut } = useAuth();
   const location = window.location.pathname;
 
@@ -422,10 +455,13 @@ const Sidebar = () => {
       { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
       { icon: Calendar, label: 'Timetable', path: '/timetable' },
       { icon: BookOpen, label: 'Courses', path: '/courses' },
+      { icon: Users, label: 'Students', path: '/students' },
+      { icon: UserIcon, label: 'Lecturers', path: '/lecturers' },
       { icon: FileText, label: 'Resources', path: '/resources' },
       { icon: CheckSquare, label: 'Attendance', path: '/attendance' },
       { icon: BarChart3, label: 'Results', path: '/results' },
       { icon: Megaphone, label: 'Announcements', path: '/announcements' },
+      { icon: Bell, label: 'Notifications', path: '/notifications' },
       ...(isDeveloper ? [
         { icon: Plus, label: 'Manage Courses (Dev)', path: '/courses' },
         { icon: FileText, label: 'Manage Resources (Dev)', path: '/resources' },
@@ -434,18 +470,24 @@ const Sidebar = () => {
     lecturer: [
       { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
       { icon: BookOpen, label: 'My Courses', path: '/courses' },
+      { icon: Users, label: 'Students', path: '/students' },
+      { icon: UserIcon, label: 'Lecturers', path: '/lecturers' },
       { icon: FileText, label: 'Manage Resources', path: '/resources' },
       { icon: Calendar, label: 'Manage Timetable', path: '/timetable' },
       { icon: Megaphone, label: 'Announcements', path: '/announcements' },
       { icon: BarChart3, label: 'Student Results', path: '/results' },
+      { icon: Bell, label: 'Notifications', path: '/notifications' },
     ],
     admin: [
       { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
       { icon: BookOpen, label: 'Manage Courses', path: '/courses' },
       { icon: Users, label: 'Manage Users', path: '/users' },
+      { icon: Users, label: 'Students', path: '/students' },
+      { icon: UserIcon, label: 'Lecturers', path: '/lecturers' },
       { icon: CheckCircle, label: 'Approve Lecturers', path: '/approvals' },
       { icon: BarChart3, label: 'Analytics', path: '/analytics' },
       { icon: Settings, label: 'System Settings', path: '/settings' },
+      { icon: Bell, label: 'Notifications', path: '/notifications' },
     ],
   };
 
@@ -455,68 +497,111 @@ const Sidebar = () => {
       : menuItems[profile.role]
   ) : [];
 
+  const sidebarClasses = cn(
+    "fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0",
+    isOpen ? "translate-x-0" : "-translate-x-full"
+  );
+
   return (
-    <div className="w-64 bg-white border-r border-gray-200 h-screen flex flex-col fixed left-0 top-0">
-      <div className="p-6">
-        <div className="flex items-center gap-2 text-indigo-600 font-bold text-xl">
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white">
-            <BookOpen size={20} />
+    <>
+      {/* Mobile Backdrop */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          />
+        )}
+      </AnimatePresence>
+
+      <div className={sidebarClasses}>
+        <div className="p-6 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-indigo-600 font-bold text-xl">
+            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white">
+              <BookOpen size={20} />
+            </div>
+            EduFlow
           </div>
-          EduFlow
+          <button onClick={onClose} className="lg:hidden p-2 text-gray-500 hover:bg-gray-100 rounded-lg">
+            <X size={20} />
+          </button>
+        </div>
+
+        <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
+          {roleItems.map((item) => (
+            <Link
+              key={`${item.label}-${item.path}`}
+              to={item.path}
+              onClick={() => onClose()}
+              className={cn(
+                'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                location === item.path 
+                  ? 'bg-indigo-50 text-indigo-600' 
+                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+              )}
+            >
+              <item.icon size={18} />
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+
+        <div className="p-4 border-t border-gray-200">
+          <div className="flex items-center gap-3 px-3 py-2 mb-2">
+            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600">
+              <UserIcon size={16} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-900 truncate">{profile?.name}</p>
+              <p className="text-xs text-gray-500 truncate capitalize">{profile?.role}</p>
+            </div>
+          </div>
+          <Button variant="ghost" className="w-full justify-start gap-3 text-red-600 hover:text-red-700 hover:bg-red-50" onClick={signOut}>
+            <LogOut size={18} />
+            Sign Out
+          </Button>
         </div>
       </div>
-
-      <nav className="flex-1 px-4 space-y-1">
-        {roleItems.map((item) => (
-          <Link
-            key={item.path}
-            to={item.path}
-            className={cn(
-              'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-              location === item.path 
-                ? 'bg-indigo-50 text-indigo-600' 
-                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-            )}
-          >
-            <item.icon size={18} />
-            {item.label}
-          </Link>
-        ))}
-      </nav>
-
-      <div className="p-4 border-t border-gray-200">
-        <div className="flex items-center gap-3 px-3 py-2 mb-2">
-          <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600">
-            <UserIcon size={16} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-gray-900 truncate">{profile?.name}</p>
-            <p className="text-xs text-gray-500 truncate capitalize">{profile?.role}</p>
-          </div>
-        </div>
-        <Button variant="ghost" className="w-full justify-start gap-3 text-red-600 hover:text-red-700 hover:bg-red-50" onClick={signOut}>
-          <LogOut size={18} />
-          Sign Out
-        </Button>
-      </div>
-    </div>
+    </>
   );
 };
 
-const Header = ({ title }: { title: string }) => (
-  <header className="h-16 bg-white border-bottom border-gray-200 flex items-center justify-between px-8 sticky top-0 z-10">
-    <h1 className="text-xl font-semibold text-gray-900">{title}</h1>
-    <div className="flex items-center gap-4">
-      <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg">
-        <Bell size={20} />
-      </button>
-      <div className="h-8 w-px bg-gray-200" />
-      <div className="flex items-center gap-2">
-        <div className="w-8 h-8 rounded-full bg-indigo-600" />
+const Header = ({ title, onMenuClick }: { title: string, onMenuClick: () => void }) => {
+  const { profile } = useAuth();
+  const notifications = useCollection<AppNotification>('notifications', (data) => data.filter(n => n.userId === profile?.uid && !n.read));
+  const unreadCount = notifications.length;
+
+  return (
+    <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 lg:px-8 sticky top-0 z-10">
+      <div className="flex items-center gap-4">
+        <button onClick={onMenuClick} className="lg:hidden p-2 text-gray-500 hover:bg-gray-100 rounded-lg">
+          <Menu size={20} />
+        </button>
+        <h1 className="text-lg lg:text-xl font-semibold text-gray-900 truncate max-w-[150px] lg:max-w-none">{title}</h1>
       </div>
-    </div>
-  </header>
-);
+      <div className="flex items-center gap-2 lg:gap-4">
+        <Link to="/notifications" className="relative p-2 text-gray-500 hover:bg-gray-100 rounded-lg">
+          <Bell size={20} />
+          {unreadCount > 0 && (
+            <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white">
+              {unreadCount > 9 ? '9+' : unreadCount}
+            </span>
+          )}
+        </Link>
+        <div className="h-8 w-px bg-gray-200 hidden sm:block" />
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-bold">
+            {profile?.name?.charAt(0) || 'U'}
+          </div>
+          <span className="text-sm font-medium text-gray-700 hidden sm:block">{profile?.name}</span>
+        </div>
+      </div>
+    </header>
+  );
+};
 
 const TimetablePage = () => {
   const { profile } = useAuth();
@@ -552,12 +637,12 @@ const TimetablePage = () => {
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 lg:p-8 space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-gray-900">Class Timetable</h2>
+        <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Class Timetable</h2>
         {(profile?.role === 'lecturer' || profile?.role === 'admin') && (
-          <Button onClick={() => { setEditingEntry({ day: 'Monday' }); setIsModalOpen(true); }} className="gap-2">
-            <Plus size={18} /> Add Entry
+          <Button onClick={() => { setEditingEntry({ day: 'Monday' }); setIsModalOpen(true); }} className="gap-2" size="sm">
+            <Plus size={18} /> <span className="hidden sm:inline">Add Entry</span>
           </Button>
         )}
       </div>
@@ -686,12 +771,12 @@ const ResourcesPage = () => {
   };
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 lg:p-8 space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-gray-900">Learning Resources</h2>
+        <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Learning Resources</h2>
         {(profile?.role === 'lecturer' || profile?.role === 'admin') && (
-          <Button onClick={() => setIsModalOpen(true)} className="gap-2">
-            <Plus size={18} /> Upload Resource
+          <Button onClick={() => setIsModalOpen(true)} className="gap-2" size="sm">
+            <Plus size={18} /> <span className="hidden sm:inline">Upload Resource</span>
           </Button>
         )}
       </div>
@@ -715,7 +800,7 @@ const ResourcesPage = () => {
                 {courses.find(c => c.id === res.courseId)?.name || 'Course'}
               </p>
               <div className="mt-4 flex items-center justify-between">
-                <span className="text-xs text-gray-500">{format(new Date(res.uploadedAt), 'MMM d, yyyy')}</span>
+                <span className="text-xs text-gray-500">{safeFormat(res.uploadedAt, 'MMM d, yyyy')}</span>
                 <a href={res.url} target="_blank" rel="noopener noreferrer">
                   <Button variant="outline" size="sm" className="gap-2">
                     Download <ChevronRight size={14} />
@@ -801,8 +886,8 @@ const AttendancePage = () => {
   };
 
   return (
-    <div className="p-8 space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900">Attendance Tracking</h2>
+    <div className="p-4 lg:p-8 space-y-6">
+      <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Attendance Tracking</h2>
       
       {profile?.role !== 'student' ? (
         <div className="space-y-6">
@@ -922,12 +1007,12 @@ const ResultsPage = () => {
   };
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 lg:p-8 space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-gray-900">Academic Results</h2>
+        <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Academic Results</h2>
         {(profile?.role === 'lecturer' || profile?.role === 'admin') && (
-          <Button onClick={() => setIsModalOpen(true)} className="gap-2">
-            <Plus size={18} /> Add Result
+          <Button onClick={() => setIsModalOpen(true)} className="gap-2" size="sm">
+            <Plus size={18} /> <span className="hidden sm:inline">Add Result</span>
           </Button>
         )}
       </div>
@@ -1031,11 +1116,35 @@ const AnnouncementsPage = () => {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await addDoc(collection(db, 'announcements'), {
+      const annRef = await addDoc(collection(db, 'announcements'), {
         ...newAnn,
         authorId: profile?.uid,
         createdAt: new Date().toISOString()
       });
+      await updateDoc(annRef, { id: annRef.id });
+
+      // Create notifications for target audience
+      // In a real app, this would be a cloud function.
+      // For this demo, we'll notify the current user if they match the role
+      // and maybe a few others if we want to simulate.
+      // But let's just notify all students/lecturers if the role matches.
+      // Note: This could be slow if there are many users.
+      const targetUsers = await getDocs(query(collection(db, 'users'), where('role', '==', newAnn.targetRole === 'all' ? 'student' : newAnn.targetRole)));
+      
+      const notificationPromises = targetUsers.docs.map(userDoc => {
+        return addDoc(collection(db, 'notifications'), {
+          userId: userDoc.id,
+          title: 'New Announcement',
+          message: newAnn.title || 'A new announcement has been posted.',
+          type: 'announcement',
+          read: false,
+          createdAt: new Date().toISOString(),
+          link: '/announcements'
+        });
+      });
+      
+      await Promise.all(notificationPromises);
+
       setIsModalOpen(false);
       setNewAnn({ targetRole: 'all' });
     } catch (err) {
@@ -1050,12 +1159,12 @@ const AnnouncementsPage = () => {
   };
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 lg:p-8 space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-gray-900">Announcements</h2>
+        <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Announcements</h2>
         {(profile?.role === 'lecturer' || profile?.role === 'admin') && (
-          <Button onClick={() => setIsModalOpen(true)} className="gap-2">
-            <Plus size={18} /> New Announcement
+          <Button onClick={() => setIsModalOpen(true)} className="gap-2" size="sm">
+            <Plus size={18} /> <span className="hidden sm:inline">New Announcement</span>
           </Button>
         )}
       </div>
@@ -1077,7 +1186,7 @@ const AnnouncementsPage = () => {
                   </div>
                   <p className="text-gray-600 whitespace-pre-wrap">{ann.content}</p>
                   <p className="text-xs text-gray-400 mt-4">
-                    Posted on {format(new Date(ann.createdAt), 'MMMM d, yyyy • h:mm a')}
+                    Posted on {safeFormat(ann.createdAt, 'MMMM d, yyyy • h:mm a')}
                   </p>
                 </div>
               </div>
@@ -1142,23 +1251,132 @@ const AnnouncementsPage = () => {
   );
 };
 
+const NotificationsPage = () => {
+  const { profile } = useAuth();
+  const notifications = useCollection<AppNotification>('notifications', (data) => 
+    data.filter(n => n.userId === profile?.uid)
+        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+  );
+
+  const markAsRead = async (id: string) => {
+    try {
+      await updateDoc(doc(db, 'notifications', id), { read: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'notifications');
+    }
+  };
+
+  const deleteNotification = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'notifications', id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'notifications');
+    }
+  };
+
+  const markAllAsRead = async () => {
+    const unread = notifications.filter(n => !n.read);
+    const promises = unread.map(n => updateDoc(doc(db, 'notifications', n.id), { read: true }));
+    await Promise.all(promises);
+  };
+
+  const getIcon = (type: string) => {
+    switch (type) {
+      case 'announcement': return <Megaphone size={20} className="text-blue-500" />;
+      case 'deadline': return <Clock size={20} className="text-orange-500" />;
+      case 'enrollment': return <BookOpen size={20} className="text-green-500" />;
+      default: return <Bell size={20} className="text-gray-500" />;
+    }
+  };
+
+  return (
+    <div className="p-4 lg:p-8 space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-900">Notifications</h2>
+        {notifications.some(n => !n.read) && (
+          <Button variant="outline" size="sm" onClick={markAllAsRead} className="gap-2">
+            <Check size={16} /> Mark all as read
+          </Button>
+        )}
+      </div>
+
+      <div className="space-y-3">
+        {notifications.map(n => (
+          <Card 
+            key={n.id} 
+            className={`p-4 transition-all hover:shadow-md border-l-4 ${n.read ? 'border-l-gray-200 bg-white' : 'border-l-indigo-600 bg-indigo-50/30'}`}
+          >
+            <div className="flex gap-4">
+              <div className="mt-1">{getIcon(n.type)}</div>
+              <div className="flex-1 min-w-0">
+                <div className="flex justify-between items-start gap-2">
+                  <h3 className={`font-semibold text-gray-900 truncate ${!n.read ? 'font-bold' : ''}`}>{n.title}</h3>
+                  <span className="text-xs text-gray-400 whitespace-nowrap">{safeFormat(n.createdAt, 'MMM d, h:mm a')}</span>
+                </div>
+                <p className="text-sm text-gray-600 mt-1">{n.message}</p>
+                <div className="flex gap-4 mt-3">
+                  {n.link && (
+                    <Link to={n.link} className="text-xs font-medium text-indigo-600 hover:underline">
+                      View Details
+                    </Link>
+                  )}
+                  {!n.read && (
+                    <button onClick={() => markAsRead(n.id)} className="text-xs font-medium text-gray-500 hover:text-indigo-600">
+                      Mark as read
+                    </button>
+                  )}
+                  <button onClick={() => deleteNotification(n.id)} className="text-xs font-medium text-gray-400 hover:text-red-600">
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          </Card>
+        ))}
+        {notifications.length === 0 && (
+          <div className="text-center py-20 bg-white rounded-2xl border-2 border-dashed border-gray-200">
+            <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 mx-auto mb-4">
+              <Bell size={32} />
+            </div>
+            <p className="text-gray-500 font-medium">No notifications yet.</p>
+            <p className="text-sm text-gray-400">We'll let you know when something important happens.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const CoursesPage = () => {
   const { profile } = useAuth();
   const courses = useCollection<Course>('courses');
   const lecturers = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'lecturer'));
   const enrollments = useCollection<Enrollment>('enrollments');
   const students = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'student'));
+  
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [newCourse, setNewCourse] = useState<Partial<Course>>({});
+  const [editingCourse, setEditingCourse] = useState<Partial<Course> | null>(null);
   const [viewingStudentsFor, setViewingStudentsFor] = useState<string | null>(null);
+  const [viewingDetailsFor, setViewingDetailsFor] = useState<Course | null>(null);
+  
+  // Search and Filter state
+  const [searchTerm, setSearchTerm] = useState('');
+  const [lecturerFilter, setLecturerFilter] = useState('');
+  const [codeFilter, setCodeFilter] = useState('');
+  const [showOnlyEnrolled, setShowOnlyEnrolled] = useState(false);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!editingCourse) return;
     try {
-      const docRef = await addDoc(collection(db, 'courses'), newCourse);
-      await updateDoc(docRef, { id: docRef.id });
+      if (editingCourse.id) {
+        await updateDoc(doc(db, 'courses', editingCourse.id), editingCourse);
+      } else {
+        const docRef = await addDoc(collection(db, 'courses'), editingCourse);
+        await updateDoc(docRef, { id: docRef.id });
+      }
       setIsModalOpen(false);
-      setNewCourse({});
+      setEditingCourse(null);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, 'courses');
     }
@@ -1173,6 +1391,8 @@ const CoursesPage = () => {
   const toggleEnrollment = async (courseId: string) => {
     if (!profile) return;
     const existing = enrollments.find(e => e.courseId === courseId && e.studentId === profile.uid);
+    const course = courses.find(c => c.id === courseId);
+
     if (existing) {
       await deleteDoc(doc(db, 'enrollments', existing.id));
     } else {
@@ -1182,6 +1402,19 @@ const CoursesPage = () => {
         enrolledAt: new Date().toISOString()
       });
       await updateDoc(docRef, { id: docRef.id });
+
+      // Notify lecturer
+      if (course?.lecturerId) {
+        await addDoc(collection(db, 'notifications'), {
+          userId: course.lecturerId,
+          title: 'New Enrollment',
+          message: `${profile.name} has enrolled in your course: ${course.name}`,
+          type: 'enrollment',
+          read: false,
+          createdAt: new Date().toISOString(),
+          link: '/courses'
+        });
+      }
     }
   };
 
@@ -1190,73 +1423,213 @@ const CoursesPage = () => {
     return students.filter(s => studentIds.includes(s.uid));
   };
 
+  const filteredCourses = courses.filter(course => {
+    const matchesSearch = course.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          course.code.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesLecturer = lecturerFilter === '' || course.lecturerId === lecturerFilter;
+    const matchesCode = codeFilter === '' || course.code.toLowerCase().includes(codeFilter.toLowerCase());
+    
+    const isEnrolled = enrollments.some(e => e.courseId === course.id && e.studentId === profile?.uid);
+    const matchesEnrolled = !showOnlyEnrolled || isEnrolled;
+
+    // Lecturers only see their own courses unless they are searching/filtering
+    const isLecturerView = profile?.role === 'lecturer' && course.lecturerId === profile.uid;
+    const isAdminOrStudentView = profile?.role === 'admin' || profile?.role === 'student';
+    
+    return matchesSearch && matchesLecturer && matchesCode && matchesEnrolled && (isAdminOrStudentView || isLecturerView);
+  });
+
   return (
-    <div className="p-8 space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-gray-900">
+    <div className="p-4 lg:p-8 space-y-6">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <h2 className="text-xl lg:text-2xl font-bold text-gray-900">
           {profile?.role === 'admin' ? 'Manage Courses' : profile?.role === 'lecturer' ? 'My Courses' : 'Available Courses'}
         </h2>
         {profile?.role === 'admin' && (
-          <Button onClick={() => setIsModalOpen(true)} className="gap-2">
-            <Plus size={18} /> Add Course
+          <Button onClick={() => { setEditingCourse({}); setIsModalOpen(true); }} className="gap-2" size="sm">
+            <Plus size={18} /> <span className="hidden sm:inline">Add Course</span>
           </Button>
         )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {courses
-          .filter(c => profile?.role !== 'lecturer' || c.lecturerId === profile.uid)
-          .map(course => {
-            const isEnrolled = enrollments.some(e => e.courseId === course.id && e.studentId === profile?.uid);
-            const enrolledCount = enrollments.filter(e => e.courseId === course.id).length;
+      {/* Search and Filters */}
+      <Card className="p-4 bg-white/50 backdrop-blur-sm">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+            <Input 
+              className="pl-10" 
+              placeholder="Search by name or code..." 
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <div className="relative">
+            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+            <Select 
+              className="pl-10"
+              value={lecturerFilter}
+              onChange={e => setLecturerFilter(e.target.value)}
+            >
+              <option value="">All Lecturers</option>
+              {lecturers.map(l => <option key={l.uid} value={l.uid}>{l.name}</option>)}
+            </Select>
+          </div>
+          <Input 
+            placeholder="Filter by Course Code..." 
+            value={codeFilter}
+            onChange={e => setCodeFilter(e.target.value)}
+          />
+          {profile?.role === 'student' && (
+            <div className="flex items-center gap-2 px-2">
+              <input 
+                type="checkbox" 
+                id="showEnrolled" 
+                className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
+                checked={showOnlyEnrolled}
+                onChange={e => setShowOnlyEnrolled(e.target.checked)}
+              />
+              <label htmlFor="showEnrolled" className="text-sm font-medium text-gray-700 cursor-pointer">
+                Show only my enrolled courses
+              </label>
+            </div>
+          )}
+        </div>
+      </Card>
 
-            return (
-              <Card key={course.id} className="p-6 relative group">
-                <div className="flex justify-between items-start">
-                  <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center mb-4">
-                    <BookOpen size={24} />
-                  </div>
-                  <div className="flex gap-2">
-                    {profile?.role === 'lecturer' && course.lecturerId === profile.uid && (
-                      <Button variant="ghost" size="sm" onClick={() => setViewingStudentsFor(course.id)}>
-                        <Users size={18} className="text-gray-400 hover:text-indigo-600" />
-                      </Button>
-                    )}
-                    {profile?.role === 'admin' && (
-                      <button onClick={() => handleDelete(course.id)} className="p-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Trash2 size={18} />
-                      </button>
-                    )}
-                  </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {filteredCourses.map(course => {
+          const isEnrolled = enrollments.some(e => e.courseId === course.id && e.studentId === profile?.uid);
+          const enrolledCount = enrollments.filter(e => e.courseId === course.id).length;
+          const isOwnCourse = profile?.role === 'lecturer' && course.lecturerId === profile.uid;
+
+          return (
+            <Card key={course.id} className="p-6 relative group flex flex-col">
+              <div className="flex justify-between items-start mb-4">
+                <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center">
+                  <BookOpen size={24} />
                 </div>
-                <h3 className="text-lg font-bold text-gray-900">{course.name}</h3>
-                <p className="text-sm text-indigo-600 font-medium">{course.code}</p>
-                
-                <div className="mt-4 pt-4 border-t border-gray-100 flex justify-between items-end">
-                  <div>
-                    <p className="text-xs text-gray-500 uppercase font-semibold">Lecturer</p>
-                    <p className="text-sm text-gray-700">{lecturers.find(l => l.uid === course.lecturerId)?.name || 'Unassigned'}</p>
-                  </div>
-                  {profile?.role === 'student' && (
-                    <Button 
-                      size="sm" 
-                      variant={isEnrolled ? 'outline' : 'primary'}
-                      onClick={() => toggleEnrollment(course.id)}
-                    >
-                      {isEnrolled ? 'Unenroll' : 'Enroll'}
+                <div className="flex gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => setViewingDetailsFor(course)}>
+                    <Info size={18} className="text-gray-400 hover:text-indigo-600" />
+                  </Button>
+                  {isOwnCourse && (
+                    <Button variant="ghost" size="sm" onClick={() => setViewingStudentsFor(course.id)}>
+                      <Users size={18} className="text-gray-400 hover:text-indigo-600" />
                     </Button>
                   )}
-                  {(profile?.role === 'lecturer' || profile?.role === 'admin') && (
-                    <div className="text-right">
-                      <p className="text-xs text-gray-500 uppercase font-semibold">Students</p>
-                      <p className="text-sm font-bold text-indigo-600">{enrolledCount}</p>
-                    </div>
+                  {(profile?.role === 'admin' || isOwnCourse) && (
+                    <Button variant="ghost" size="sm" onClick={() => { setEditingCourse(course); setIsModalOpen(true); }}>
+                      <Edit size={18} className="text-gray-400 hover:text-indigo-600" />
+                    </Button>
+                  )}
+                  {profile?.role === 'admin' && (
+                    <button onClick={() => handleDelete(course.id)} className="p-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Trash2 size={18} />
+                    </button>
                   )}
                 </div>
-              </Card>
-            );
-          })}
+              </div>
+              
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-gray-900">{course.name}</h3>
+                <p className="text-sm text-indigo-600 font-medium mb-2">{course.code}</p>
+                {course.description && (
+                  <p className="text-sm text-gray-500 line-clamp-2 mb-4">{course.description}</p>
+                )}
+              </div>
+              
+              <div className="mt-auto pt-4 border-t border-gray-100 flex justify-between items-end">
+                <div>
+                  <p className="text-xs text-gray-500 uppercase font-semibold">Lecturer</p>
+                  <p className="text-sm text-gray-700">{lecturers.find(l => l.uid === course.lecturerId)?.name || 'Unassigned'}</p>
+                </div>
+                {profile?.role === 'student' && (
+                  <Button 
+                    size="sm" 
+                    variant={isEnrolled ? 'outline' : 'primary'}
+                    onClick={() => toggleEnrollment(course.id)}
+                  >
+                    {isEnrolled ? 'Unenroll' : 'Enroll'}
+                  </Button>
+                )}
+                {(profile?.role === 'lecturer' || profile?.role === 'admin') && (
+                  <div className="text-right">
+                    <p className="text-xs text-gray-500 uppercase font-semibold">Students</p>
+                    <p className="text-sm font-bold text-indigo-600">{enrolledCount}</p>
+                  </div>
+                )}
+              </div>
+            </Card>
+          );
+        })}
+        {filteredCourses.length === 0 && (
+          <div className="col-span-full py-12 text-center">
+            <p className="text-gray-500">No courses found matching your criteria.</p>
+          </div>
+        )}
       </div>
+
+      {/* Course Details Modal */}
+      <AnimatePresence>
+        {viewingDetailsFor && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="w-full max-w-2xl">
+              <Card className="p-4 lg:p-8">
+                <div className="flex justify-between items-start mb-6">
+                  <div className="flex gap-4 items-center">
+                    <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center">
+                      <BookOpen size={32} />
+                    </div>
+                    <div>
+                      <h3 className="text-2xl font-bold text-gray-900">{viewingDetailsFor.name}</h3>
+                      <p className="text-lg text-indigo-600 font-medium">{viewingDetailsFor.code}</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setViewingDetailsFor(null)} className="text-gray-400 hover:text-gray-600">
+                    <XCircle size={28} />
+                  </button>
+                </div>
+                
+                <div className="space-y-6">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-2">Description</h4>
+                    <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
+                      <p className="text-gray-700 leading-relaxed">
+                        {viewingDetailsFor.description || 'No description provided for this course.'}
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-6">
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-2">Lecturer</h4>
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold">
+                          {lecturers.find(l => l.uid === viewingDetailsFor.lecturerId)?.name.charAt(0) || '?'}
+                        </div>
+                        <p className="font-medium text-gray-900">
+                          {lecturers.find(l => l.uid === viewingDetailsFor.lecturerId)?.name || 'Unassigned'}
+                        </p>
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-2">Enrollment Status</h4>
+                      <Badge variant={enrollments.some(e => e.courseId === viewingDetailsFor.id && e.studentId === profile?.uid) ? 'success' : 'default'} className="text-sm py-1 px-3">
+                        {enrollments.some(e => e.courseId === viewingDetailsFor.id && e.studentId === profile?.uid) ? 'Enrolled' : 'Not Enrolled'}
+                      </Badge>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="mt-8 pt-6 border-t border-gray-100 flex justify-end">
+                  <Button onClick={() => setViewingDetailsFor(null)}>Close Details</Button>
+                </div>
+              </Card>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Enrolled Students Modal */}
       <AnimatePresence>
@@ -1293,33 +1666,363 @@ const CoursesPage = () => {
         )}
       </AnimatePresence>
 
+      {/* Add/Edit Course Modal */}
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}>
               <Card className="w-full max-w-md p-6">
-                <h3 className="text-xl font-bold mb-6">Add New Course</h3>
+                <h3 className="text-xl font-bold mb-6">{editingCourse?.id ? 'Edit Course' : 'Add New Course'}</h3>
                 <form onSubmit={handleSave} className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Course Name</label>
-                    <Input required placeholder="e.g. Data Structures" value={newCourse.name || ''} onChange={e => setNewCourse({ ...newCourse, name: e.target.value })} />
+                    <Input 
+                      required 
+                      disabled={profile?.role !== 'admin'}
+                      placeholder="e.g. Data Structures" 
+                      value={editingCourse?.name || ''} 
+                      onChange={e => setEditingCourse({ ...editingCourse!, name: e.target.value })} 
+                    />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Course Code</label>
-                    <Input required placeholder="e.g. CS201" value={newCourse.code || ''} onChange={e => setNewCourse({ ...newCourse, code: e.target.value })} />
+                    <Input 
+                      required 
+                      disabled={profile?.role !== 'admin'}
+                      placeholder="e.g. CS201" 
+                      value={editingCourse?.code || ''} 
+                      onChange={e => setEditingCourse({ ...editingCourse!, code: e.target.value })} 
+                    />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Assigned Lecturer</label>
-                    <Select required value={newCourse.lecturerId || ''} onChange={e => setNewCourse({ ...newCourse, lecturerId: e.target.value })}>
-                      <option value="">Select a lecturer</option>
-                      {lecturers.map(l => <option key={l.uid} value={l.uid}>{l.name}</option>)}
-                    </Select>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <Textarea 
+                      placeholder="Provide a detailed overview of the course..." 
+                      value={editingCourse?.description || ''} 
+                      onChange={e => setEditingCourse({ ...editingCourse!, description: e.target.value })} 
+                    />
                   </div>
+                  {profile?.role === 'admin' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Assigned Lecturer</label>
+                      <Select required value={editingCourse?.lecturerId || ''} onChange={e => setEditingCourse({ ...editingCourse!, lecturerId: e.target.value })}>
+                        <option value="">Select a lecturer</option>
+                        {lecturers.map(l => <option key={l.uid} value={l.uid}>{l.name}</option>)}
+                      </Select>
+                    </div>
+                  )}
                   <div className="flex gap-3 pt-4">
-                    <Button type="button" variant="outline" className="flex-1" onClick={() => setIsModalOpen(false)}>Cancel</Button>
-                    <Button type="submit" className="flex-1">Create Course</Button>
+                    <Button type="button" variant="outline" className="flex-1" onClick={() => { setIsModalOpen(false); setEditingCourse(null); }}>Cancel</Button>
+                    <Button type="submit" className="flex-1">{editingCourse?.id ? 'Update Course' : 'Create Course'}</Button>
                   </div>
                 </form>
+              </Card>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+const StudentsPage = () => {
+  const { profile } = useAuth();
+  const students = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'student'));
+  const enrollments = useCollection<Enrollment>('enrollments');
+  const courses = useCollection<Course>('courses');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedStudent, setSelectedStudent] = useState<UserProfile | null>(null);
+  const isAdmin = profile?.role === 'admin';
+
+  const filteredStudents = students.filter(s => 
+    s.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    s.email.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const getStudentCourses = (studentId: string) => {
+    const courseIds = enrollments.filter(e => e.studentId === studentId).map(e => e.courseId);
+    return courses.filter(c => courseIds.includes(c.id));
+  };
+
+  const handleDeleteStudent = async (uid: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm('Are you sure you want to delete this student?')) {
+      try {
+        await deleteDoc(doc(db, 'users', uid));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, 'users');
+      }
+    }
+  };
+
+  const handleUpdateRole = async (uid: string, newRole: UserRole, e: React.ChangeEvent) => {
+    e.stopPropagation();
+    try {
+      await updateDoc(doc(db, 'users', uid), { role: newRole });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'users');
+    }
+  };
+
+  return (
+    <div className="p-4 lg:p-8 space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Students Directory</h2>
+        {isAdmin && <Badge variant="default">Admin Mode</Badge>}
+      </div>
+
+      <Card className="p-4">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+          <Input 
+            className="pl-10" 
+            placeholder="Search students by name or email..." 
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+          />
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {filteredStudents.map(student => (
+          <Card key={student.uid} className="p-6 hover:shadow-md transition-shadow cursor-pointer relative group" onClick={() => setSelectedStudent(student)}>
+            {isAdmin && (
+              <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button 
+                  onClick={(e) => handleDeleteStudent(student.uid, e)}
+                  className="p-1.5 bg-red-50 text-red-600 rounded-md hover:bg-red-100"
+                  title="Delete Student"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            )}
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xl">
+                {student.name.charAt(0)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold text-gray-900 truncate">{student.name}</h3>
+                <p className="text-sm text-gray-500 truncate">{student.email}</p>
+              </div>
+              <ChevronRight size={20} className="text-gray-400" />
+            </div>
+            
+            <div className="mt-4 pt-4 border-t border-gray-100 flex justify-between items-end">
+              <div>
+                <p className="text-xs text-gray-500 uppercase font-semibold">Enrolled Courses</p>
+                <p className="text-sm font-bold text-indigo-600">{getStudentCourses(student.uid).length}</p>
+              </div>
+              {isAdmin && (
+                <div onClick={e => e.stopPropagation()}>
+                  <Select 
+                    className="text-xs py-1 h-8" 
+                    value={student.role}
+                    onChange={e => handleUpdateRole(student.uid, e.target.value as UserRole, e)}
+                  >
+                    <option value="student">Student</option>
+                    <option value="lecturer">Lecturer</option>
+                    <option value="admin">Admin</option>
+                  </Select>
+                </div>
+              )}
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <AnimatePresence>
+        {selectedStudent && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="w-full max-w-md">
+              <Card className="p-6">
+                <div className="flex justify-between items-start mb-6">
+                  <div className="flex items-center gap-4">
+                    <div className="w-16 h-16 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-2xl">
+                      {selectedStudent.name.charAt(0)}
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-gray-900">{selectedStudent.name}</h3>
+                      <p className="text-sm text-gray-500">{selectedStudent.email}</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setSelectedStudent(null)} className="text-gray-400 hover:text-gray-600">
+                    <XCircle size={24} />
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <h4 className="font-semibold text-gray-900 border-b pb-2">Enrolled Courses</h4>
+                  <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
+                    {getStudentCourses(selectedStudent.uid).map(course => (
+                      <div key={course.id} className="p-3 rounded-lg bg-gray-50 border border-gray-100 flex justify-between items-center">
+                        <div>
+                          <p className="text-sm font-bold text-gray-900">{course.name}</p>
+                          <p className="text-xs text-indigo-600">{course.code}</p>
+                        </div>
+                      </div>
+                    ))}
+                    {getStudentCourses(selectedStudent.uid).length === 0 && (
+                      <p className="text-center text-gray-500 py-4 italic">No courses enrolled.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-6 pt-6 border-t border-gray-100">
+                  <Button className="w-full" onClick={() => setSelectedStudent(null)}>Close</Button>
+                </div>
+              </Card>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+const LecturersPage = () => {
+  const { profile } = useAuth();
+  const lecturers = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'lecturer' && u.isApproved));
+  const courses = useCollection<Course>('courses');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedLecturer, setSelectedLecturer] = useState<UserProfile | null>(null);
+  const isAdmin = profile?.role === 'admin';
+
+  const filteredLecturers = lecturers.filter(l => 
+    l.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    l.email.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const getLecturerCourses = (lecturerId: string) => {
+    return courses.filter(c => c.lecturerId === lecturerId);
+  };
+
+  const handleDeleteLecturer = async (uid: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm('Are you sure you want to delete this lecturer?')) {
+      try {
+        await deleteDoc(doc(db, 'users', uid));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, 'users');
+      }
+    }
+  };
+
+  const handleUpdateRole = async (uid: string, newRole: UserRole, e: React.ChangeEvent) => {
+    e.stopPropagation();
+    try {
+      await updateDoc(doc(db, 'users', uid), { role: newRole });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'users');
+    }
+  };
+
+  return (
+    <div className="p-4 lg:p-8 space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Lecturers Directory</h2>
+        {isAdmin && <Badge variant="default">Admin Mode</Badge>}
+      </div>
+
+      <Card className="p-4">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+          <Input 
+            className="pl-10" 
+            placeholder="Search lecturers by name or email..." 
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+          />
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {filteredLecturers.map(lecturer => (
+          <Card key={lecturer.uid} className="p-6 hover:shadow-md transition-shadow cursor-pointer relative group" onClick={() => setSelectedLecturer(lecturer)}>
+            {isAdmin && (
+              <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button 
+                  onClick={(e) => handleDeleteLecturer(lecturer.uid, e)}
+                  className="p-1.5 bg-red-50 text-red-600 rounded-md hover:bg-red-100"
+                  title="Delete Lecturer"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            )}
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center font-bold text-xl">
+                {lecturer.name.charAt(0)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold text-gray-900 truncate">{lecturer.name}</h3>
+                <p className="text-sm text-gray-500 truncate">{lecturer.email}</p>
+              </div>
+              <ChevronRight size={20} className="text-gray-400" />
+            </div>
+            <div className="mt-4 pt-4 border-t border-gray-100 flex justify-between items-end">
+              <div>
+                <p className="text-xs text-gray-500 uppercase font-semibold">Courses Taught</p>
+                <p className="text-sm font-bold text-purple-600">{getLecturerCourses(lecturer.uid).length}</p>
+              </div>
+              {isAdmin && (
+                <div onClick={e => e.stopPropagation()}>
+                  <Select 
+                    className="text-xs py-1 h-8" 
+                    value={lecturer.role}
+                    onChange={e => handleUpdateRole(lecturer.uid, e.target.value as UserRole, e)}
+                  >
+                    <option value="student">Student</option>
+                    <option value="lecturer">Lecturer</option>
+                    <option value="admin">Admin</option>
+                  </Select>
+                </div>
+              )}
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <AnimatePresence>
+        {selectedLecturer && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="w-full max-w-md">
+              <Card className="p-6">
+                <div className="flex justify-between items-start mb-6">
+                  <div className="flex items-center gap-4">
+                    <div className="w-16 h-16 rounded-full bg-purple-600 flex items-center justify-center text-white font-bold text-2xl">
+                      {selectedLecturer.name.charAt(0)}
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-gray-900">{selectedLecturer.name}</h3>
+                      <p className="text-sm text-gray-500">{selectedLecturer.email}</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setSelectedLecturer(null)} className="text-gray-400 hover:text-gray-600">
+                    <XCircle size={24} />
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <h4 className="font-semibold text-gray-900 border-b pb-2">Courses Taught</h4>
+                  <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
+                    {getLecturerCourses(selectedLecturer.uid).map(course => (
+                      <div key={course.id} className="p-3 rounded-lg bg-gray-50 border border-gray-100 flex justify-between items-center">
+                        <div>
+                          <p className="text-sm font-bold text-gray-900">{course.name}</p>
+                          <p className="text-xs text-purple-600">{course.code}</p>
+                        </div>
+                      </div>
+                    ))}
+                    {getLecturerCourses(selectedLecturer.uid).length === 0 && (
+                      <p className="text-center text-gray-500 py-4 italic">No courses assigned.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-6 pt-6 border-t border-gray-100">
+                  <Button className="w-full" onClick={() => setSelectedLecturer(null)}>Close</Button>
+                </div>
               </Card>
             </motion.div>
           </div>
@@ -1351,12 +2054,12 @@ const UsersPage = () => {
     }
   };
 
-  if (profile?.role !== 'admin') return <div className="p-8">Access Denied</div>;
+  if (profile?.role !== 'admin') return <div className="p-4 lg:p-8">Access Denied</div>;
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 lg:p-8 space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-gray-900">User Management</h2>
+        <h2 className="text-xl lg:text-2xl font-bold text-gray-900">User Management</h2>
       </div>
 
       <Card>
@@ -1429,11 +2132,11 @@ const ApprovalsPage = () => {
     }
   };
 
-  if (profile?.role !== 'admin') return <div className="p-8">Access Denied</div>;
+  if (profile?.role !== 'admin') return <div className="p-4 lg:p-8">Access Denied</div>;
 
   return (
-    <div className="p-8 space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900">Lecturer Approvals</h2>
+    <div className="p-4 lg:p-8 space-y-6">
+      <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Lecturer Approvals</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {pendingUsers.map(u => (
           <Card key={u.uid} className="p-6">
@@ -1475,7 +2178,7 @@ const AnalyticsPage = () => {
     enrollments: enrollments.length
   };
 
-  if (profile?.role !== 'admin') return <div className="p-8">Access Denied</div>;
+  if (profile?.role !== 'admin') return <div className="p-4 lg:p-8">Access Denied</div>;
 
   const chartData = [
     { name: 'Students', value: stats.students },
@@ -1485,8 +2188,8 @@ const AnalyticsPage = () => {
   ];
 
   return (
-    <div className="p-8 space-y-8">
-      <h2 className="text-2xl font-bold text-gray-900">System Analytics</h2>
+    <div className="p-4 lg:p-8 space-y-8">
+      <h2 className="text-xl lg:text-2xl font-bold text-gray-900">System Analytics</h2>
       
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <Card className="p-6">
@@ -1571,9 +2274,9 @@ const SettingsPage = () => {
   };
 
   return (
-    <div className="p-8 max-w-2xl mx-auto">
-      <h2 className="text-2xl font-bold text-gray-900 mb-8">Account Settings</h2>
-      <Card className="p-8">
+    <div className="p-4 lg:p-8 max-w-2xl mx-auto">
+      <h2 className="text-xl lg:text-2xl font-bold text-gray-900 mb-8">Account Settings</h2>
+      <Card className="p-4 lg:p-8">
         <form onSubmit={handleUpdate} className="space-y-6">
           <div className="flex items-center gap-6 mb-8">
             <div className="w-20 h-20 rounded-full bg-indigo-600 flex items-center justify-center text-white text-3xl font-bold">
@@ -1634,7 +2337,7 @@ const LandingPage = () => {
         <h1 className="text-4xl font-bold text-gray-900 mb-2">EduFlow</h1>
         <p className="text-gray-600 mb-8">The all-in-one university management platform for students, lecturers, and admins.</p>
         
-        <Card className="p-8">
+        <Card className="p-6 lg:p-8">
           <h2 className="text-xl font-semibold mb-6">Welcome Back</h2>
           <Button className="w-full py-6 text-lg gap-3" onClick={signIn}>
             <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
@@ -1681,12 +2384,13 @@ const Dashboard = () => {
   if (profile?.role === 'lecturer') {
     if (!profile.isApproved) {
       return (
-        <div className="p-8 flex flex-col items-center justify-center min-h-[60vh] text-center">
-          <div className="w-20 h-20 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mb-6">
-            <Clock size={40} />
+        <div className="p-4 lg:p-8 flex flex-col items-center justify-center min-h-[60vh] text-center">
+          <div className="w-16 h-16 lg:w-20 lg:h-20 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mb-6">
+            <Clock size={32} className="lg:hidden" />
+            <Clock size={40} className="hidden lg:block" />
           </div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Approval Pending</h2>
-          <p className="text-gray-600 max-w-md">
+          <h2 className="text-xl lg:text-2xl font-bold text-gray-900 mb-2">Approval Pending</h2>
+          <p className="text-sm lg:text-base text-gray-600 max-w-md">
             Your lecturer account is currently pending approval from the administrator. 
             Once approved, you will have full access to manage courses, resources, and students.
           </p>
@@ -1704,8 +2408,8 @@ const Dashboard = () => {
 
 const StudentDashboard = ({ announcements, timetable }: { announcements: Announcement[], timetable: TimetableEntry[] }) => {
   return (
-    <div className="p-8 space-y-8">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div className="p-4 lg:p-8 space-y-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 lg:gap-6">
         <Card className="p-6 bg-indigo-600 text-white">
           <div className="flex justify-between items-start mb-4">
             <div className="p-2 bg-white/20 rounded-lg">
@@ -1773,7 +2477,7 @@ const StudentDashboard = ({ announcements, timetable }: { announcements: Announc
                   <div>
                     <h4 className="font-medium text-gray-900">{ann.title}</h4>
                     <p className="text-sm text-gray-500 line-clamp-1">{ann.content}</p>
-                    <p className="text-xs text-gray-400 mt-1">{format(new Date(ann.createdAt), 'MMM d, h:mm a')}</p>
+                    <p className="text-xs text-gray-400 mt-1">{safeFormat(ann.createdAt, 'MMM d, h:mm a')}</p>
                   </div>
                 </div>
               </Card>
@@ -1826,7 +2530,7 @@ const LecturerDashboard = ({ announcements }: { announcements: Announcement[] })
   };
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-4 lg:p-8 space-y-8">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card className="p-6">
           <div className="flex justify-between items-start mb-4">
@@ -1875,6 +2579,7 @@ const LecturerDashboard = ({ announcements }: { announcements: Announcement[] })
                   <div>
                     <h4 className="font-medium text-gray-900">{ann.title}</h4>
                     <p className="text-sm text-gray-500 line-clamp-1">{ann.content}</p>
+                    <p className="text-xs text-gray-400 mt-1">{safeFormat(ann.createdAt, 'MMM d, h:mm a')}</p>
                   </div>
                 </div>
               </Card>
@@ -1937,7 +2642,7 @@ const AdminDashboard = () => {
   ];
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-4 lg:p-8 space-y-8">
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <Card className="p-6">
           <p className="text-sm text-gray-500 mb-1">Total Users</p>
@@ -2008,6 +2713,7 @@ const AdminDashboard = () => {
 const AppContent = () => {
   const { profile, loading } = useAuth();
   const navigate = useNavigate();
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   useEffect(() => {
     const seedDemoCourse = async () => {
@@ -2033,25 +2739,32 @@ const AppContent = () => {
 
   if (!profile) return <LandingPage />;
 
+  const pageTitle = window.location.pathname.split('/')[1]?.charAt(0).toUpperCase() + window.location.pathname.split('/')[1]?.slice(1) || 'Dashboard';
+
   return (
     <div className="min-h-screen bg-gray-50 flex">
-      <Sidebar />
-      <main className="flex-1 ml-64 min-h-screen">
-        <Header title={window.location.pathname.split('/')[1].charAt(0).toUpperCase() + window.location.pathname.split('/')[1].slice(1) || 'Dashboard'} />
-        <Routes>
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/courses" element={<CoursesPage />} />
-          <Route path="/timetable" element={<TimetablePage />} />
-          <Route path="/resources" element={<ResourcesPage />} />
-          <Route path="/attendance" element={<AttendancePage />} />
-          <Route path="/results" element={<ResultsPage />} />
-          <Route path="/announcements" element={<AnnouncementsPage />} />
-          <Route path="/users" element={<UsersPage />} />
-          <Route path="/approvals" element={<ApprovalsPage />} />
-          <Route path="/analytics" element={<AnalyticsPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="*" element={<Navigate to="/dashboard" />} />
-        </Routes>
+      <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
+      <main className="flex-1 lg:ml-64 min-h-screen w-full">
+        <Header title={pageTitle} onMenuClick={() => setIsSidebarOpen(true)} />
+        <div className="max-w-7xl mx-auto">
+          <Routes>
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/courses" element={<CoursesPage />} />
+            <Route path="/students" element={<StudentsPage />} />
+            <Route path="/lecturers" element={<LecturersPage />} />
+            <Route path="/timetable" element={<TimetablePage />} />
+            <Route path="/resources" element={<ResourcesPage />} />
+            <Route path="/attendance" element={<AttendancePage />} />
+            <Route path="/results" element={<ResultsPage />} />
+            <Route path="/announcements" element={<AnnouncementsPage />} />
+            <Route path="/notifications" element={<NotificationsPage />} />
+            <Route path="/users" element={<UsersPage />} />
+            <Route path="/approvals" element={<ApprovalsPage />} />
+            <Route path="/analytics" element={<AnalyticsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/dashboard" />} />
+          </Routes>
+        </div>
         <RoleSwitcher />
         {profile?.role === 'student' && <AIAssistant />}
       </main>

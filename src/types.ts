@@ -13,6 +13,7 @@ export interface Course {
   name: string;
   code: string;
   lecturerId: string;
+  description?: string;
 }
 
 export interface TimetableEntry {
@@ -65,4 +66,15 @@ export interface Enrollment {
   studentId: string;
   courseId: string;
   enrolledAt: string;
+}
+
+export interface AppNotification {
+  id: string;
+  userId: string;
+  title: string;
+  message: string;
+  type: 'announcement' | 'deadline' | 'message' | 'system';
+  read: boolean;
+  createdAt: string;
+  link?: string;
 }

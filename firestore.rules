@@ -80,6 +80,18 @@ service cloud.firestore {
     //   - courseId: string (required)
     //   - enrolledAt: timestamp (required)
     //
+    // Collection: notifications
+    // Document ID: notificationId
+    // Fields:
+    //   - id: string (required)
+    //   - userId: string (required)
+    //   - title: string (required)
+    //   - message: string (required)
+    //   - type: string (required, enum: announcement, deadline, message, system)
+    //   - read: bool (required)
+    //   - createdAt: timestamp (required)
+    //   - link: string (optional)
+    //
     // ===============================================================
 
     // ===============================================================
@@ -187,6 +199,13 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (isOwner(resource.data.studentId) || isAdmin() || isLecturer());
       allow create: if isAuthenticated() && isOwner(request.resource.data.studentId);
       allow delete: if isAuthenticated() && (isOwner(resource.data.studentId) || isAdmin());
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isOwner(resource.data.userId);
+      allow create: if isAuthenticated();
+      allow update: if isOwner(resource.data.userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if isOwner(resource.data.userId);
     }
 
     match /test/{docId} {

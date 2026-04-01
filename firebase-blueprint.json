@@ -105,6 +105,22 @@
         "enrolledAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "studentId", "courseId", "enrolledAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "A user notification.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["announcement", "deadline", "message", "system"] },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "link": { "type": "string" }
+      },
+      "required": ["id", "userId", "title", "message", "type", "read", "createdAt"]
     }
   },
   "firestore": {
@@ -115,6 +131,7 @@
     "/attendance/{attendanceId}": { "schema": "Attendance", "description": "Attendance records" },
     "/results/{resultId}": { "schema": "Result", "description": "Student results" },
     "/announcements/{announcementId}": { "schema": "Announcement", "description": "Announcements" },
-    "/enrollments/{enrollmentId}": { "schema": "Enrollment", "description": "Course enrollments" }
+    "/enrollments/{enrollmentId}": { "schema": "Enrollment", "description": "Course enrollments" },
+    "/notifications/{notificationId}": { "schema": "Notification", "description": "User notifications" }
   }
 }
