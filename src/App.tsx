@@ -190,6 +190,7 @@ interface AuthContextType {
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
   setRole: (role: UserRole) => Promise<void>;
+  completeRegistration: (role: UserRole) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -998,16 +999,8 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         if (profileDoc.exists()) {
           setProfile(profileDoc.data() as UserProfile);
         } else {
-          // New user - default to student for now, or show role selection
-          const newProfile: UserProfile = {
-            uid: firebaseUser.uid,
-            name: firebaseUser.displayName || 'Anonymous',
-            email: firebaseUser.email || '',
-            role: 'student',
-            isApproved: true,
-          };
-          await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
-          setProfile(newProfile);
+          // New user - profile will be null, triggering role selection
+          setProfile(null);
         }
       } else {
         setProfile(null);
@@ -1033,8 +1026,21 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setProfile(updatedProfile);
   };
 
+  const completeRegistration = async (role: UserRole) => {
+    if (!user) return;
+    const newProfile: UserProfile = {
+      uid: user.uid,
+      name: user.displayName || 'Anonymous',
+      email: user.email || '',
+      role: role,
+      isApproved: true,
+    };
+    await setDoc(doc(db, 'users', user.uid), newProfile);
+    setProfile(newProfile);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signIn, signOut, setRole }}>
+    <AuthContext.Provider value={{ user, profile, loading, signIn, signOut, setRole, completeRegistration }}>
       {children}
     </AuthContext.Provider>
   );
@@ -3333,6 +3339,110 @@ const SettingsPage = () => {
   );
 };
 
+const RoleSelection = () => {
+  const { completeRegistration, signOut, user } = useAuth();
+  const [selectedRole, setSelectedRole] = useState<UserRole | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const roles: { id: UserRole; title: string; description: string; icon: any; color: string }[] = [
+    { 
+      id: 'student', 
+      title: 'Student', 
+      description: 'Access courses, submit assignments, and track your academic progress.', 
+      icon: Users,
+      color: 'bg-blue-50 text-blue-600 border-blue-100'
+    },
+    { 
+      id: 'lecturer', 
+      title: 'Lecturer', 
+      description: 'Manage courses, upload resources, and interact with your students.', 
+      icon: UserIcon,
+      color: 'bg-purple-50 text-purple-600 border-purple-100'
+    },
+    { 
+      id: 'admin', 
+      title: 'Administrator', 
+      description: 'Oversee the entire system, manage users, and view platform analytics.', 
+      icon: Settings,
+      color: 'bg-orange-50 text-orange-600 border-orange-100'
+    }
+  ];
+
+  const handleComplete = async () => {
+    if (!selectedRole) return;
+    setIsSubmitting(true);
+    try {
+      await completeRegistration(selectedRole);
+    } catch (error) {
+      console.error('Error completing registration:', error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="max-w-2xl w-full"
+      >
+        <div className="text-center mb-10">
+          <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white mx-auto mb-6 shadow-lg">
+            <Sparkles size={32} />
+          </div>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Complete Your Profile</h1>
+          <p className="text-gray-600">Welcome, {user?.displayName}! Please select your primary role to continue.</p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+          {roles.map((role) => (
+            <button
+              key={role.id}
+              onClick={() => setSelectedRole(role.id)}
+              className={cn(
+                "relative flex flex-col items-center p-6 rounded-2xl border-2 transition-all text-center group",
+                selectedRole === role.id 
+                  ? "border-indigo-600 bg-white shadow-xl -translate-y-1" 
+                  : "border-transparent bg-white hover:border-gray-200 shadow-sm"
+              )}
+            >
+              <div className={cn("w-14 h-14 rounded-xl flex items-center justify-center mb-4 transition-transform group-hover:scale-110", role.color)}>
+                <role.icon size={28} />
+              </div>
+              <h3 className="font-bold text-gray-900 mb-2">{role.title}</h3>
+              <p className="text-xs text-gray-500 leading-relaxed">{role.description}</p>
+              
+              {selectedRole === role.id && (
+                <div className="absolute -top-2 -right-2 bg-indigo-600 text-white rounded-full p-1 shadow-lg">
+                  <Check size={14} />
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <Button 
+            className="w-full sm:w-48 py-6 text-lg" 
+            disabled={!selectedRole || isSubmitting}
+            onClick={handleComplete}
+          >
+            {isSubmitting ? 'Setting up...' : 'Get Started'}
+          </Button>
+          <Button 
+            variant="ghost" 
+            className="w-full sm:w-48 py-6 text-gray-500"
+            onClick={signOut}
+          >
+            Cancel & Sign Out
+          </Button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
 const LoginPage = () => {
   const { signIn, user, profile, loading } = useAuth();
   const navigate = useNavigate();
@@ -3781,7 +3891,7 @@ const AdminDashboard = () => {
 
 // --- Main App ---
 const AppContent = () => {
-  const { profile, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const navigate = useNavigate();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
@@ -3818,11 +3928,13 @@ const AppContent = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
-      {!profile ? (
+      {!user ? (
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
+      ) : !profile ? (
+        <RoleSelection />
       ) : (
         <>
           <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
