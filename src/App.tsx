@@ -44,7 +44,8 @@ import {
   FileSearch,
   Brain,
   StickyNote,
-  Notebook
+  Notebook,
+  Database
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -1033,7 +1034,7 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       name: user.displayName || 'Anonymous',
       email: user.email || '',
       role: role,
-      isApproved: true,
+      isApproved: role === 'student', // Students auto-approved, others (lecturer/admin) need verification
     };
     await setDoc(doc(db, 'users', user.uid), newProfile);
     setProfile(newProfile);
@@ -3128,6 +3129,14 @@ const UsersPage = () => {
     }
   };
 
+  const handleApproveUser = async (uid: string) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { isApproved: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'users');
+    }
+  };
+
   const handleDeleteUser = async (uid: string) => {
     if (confirm('Are you sure you want to delete this user?')) {
       try {
@@ -3178,8 +3187,16 @@ const UsersPage = () => {
                     {u.isApproved ? 'Approved' : 'Pending'}
                   </Badge>
                 </td>
-                <td className="px-6 py-4 text-right">
-                  <button onClick={() => handleDeleteUser(u.uid)} className="text-red-600 hover:text-red-900">
+                <td className="px-6 py-4 text-right space-x-3">
+                  {!u.isApproved && (
+                    <button 
+                      onClick={() => handleApproveUser(u.uid)} 
+                      className="text-green-600 hover:text-green-900 font-medium text-sm"
+                    >
+                      Approve
+                    </button>
+                  )}
+                  <button onClick={() => handleDeleteUser(u.uid)} className="text-red-600 hover:text-red-900 inline-block align-middle">
                     <Trash2 size={18} />
                   </button>
                 </td>
@@ -3285,6 +3302,35 @@ const SettingsPage = () => {
   const { profile } = useAuth();
   const [name, setName] = useState(profile?.name || '');
   const [isSaving, setIsSaving] = useState(false);
+  const [isSeeding, setIsSeeding] = useState(false);
+
+  const seedDatabase = async () => {
+    if (!confirm('This will populate the database with sample data. Continue?')) return;
+    setIsSeeding(true);
+    try {
+      // Seed Courses
+      for (const course of MOCK_DATA.courses) {
+        await setDoc(doc(db, 'courses', course.id), course);
+      }
+      // Seed Timetable
+      for (const entry of MOCK_DATA.timetable) {
+        await setDoc(doc(db, 'timetable', entry.id), entry);
+      }
+      // Seed Announcements
+      for (const ann of MOCK_DATA.announcements) {
+        await setDoc(doc(db, 'announcements', ann.id), ann);
+      }
+      // Seed Resources
+      for (const res of MOCK_DATA.resources) {
+        await setDoc(doc(db, 'resources', res.id), res);
+      }
+      alert('Database seeded successfully!');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'seed');
+    } finally {
+      setIsSeeding(false);
+    }
+  };
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3334,7 +3380,77 @@ const SettingsPage = () => {
             </Button>
           </div>
         </form>
+
+        {profile?.role === 'admin' && (
+          <div className="mt-12 pt-8 border-t border-gray-100">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Admin Tools</h3>
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6">
+              <div className="flex items-start gap-4 mb-6">
+                <div className="p-2 bg-amber-100 text-amber-600 rounded-lg">
+                  <Database size={20} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-amber-900">Seed Database</h4>
+                  <p className="text-sm text-amber-700 mt-1">
+                    Populate the database with sample courses, timetable entries, and announcements to quickly see the platform in action.
+                  </p>
+                </div>
+              </div>
+              <Button 
+                variant="outline" 
+                className="w-full bg-white border-amber-200 text-amber-700 hover:bg-amber-100"
+                onClick={seedDatabase}
+                disabled={isSeeding}
+              >
+                {isSeeding ? 'Seeding...' : 'Seed Sample Data'}
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
+    </div>
+  );
+};
+
+const PendingApproval = () => {
+  const { signOut, profile } = useAuth();
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="max-w-md w-full text-center"
+      >
+        <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center text-amber-600 mx-auto mb-6">
+          <Clock size={40} />
+        </div>
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">Account Pending Approval</h1>
+        <p className="text-gray-600 mb-8">
+          Thank you for registering as a <span className="font-semibold text-indigo-600">{profile?.role}</span>. 
+          Your account is currently being reviewed by our administrators. You will have full access once verified.
+        </p>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 mb-8">
+          <h3 className="text-sm font-medium text-gray-900 mb-4">What happens next?</h3>
+          <ul className="text-sm text-gray-500 text-left space-y-3">
+            <li className="flex gap-3">
+              <div className="w-5 h-5 bg-green-100 text-green-600 rounded-full flex items-center justify-center flex-shrink-0">
+                <Check size={12} />
+              </div>
+              Verification of your credentials
+            </li>
+            <li className="flex gap-3">
+              <div className="w-5 h-5 bg-green-100 text-green-600 rounded-full flex items-center justify-center flex-shrink-0">
+                <Check size={12} />
+              </div>
+              Email notification upon approval
+            </li>
+          </ul>
+        </div>
+        <Button variant="outline" className="w-full py-6" onClick={signOut}>
+          <LogOut size={18} className="mr-2" />
+          Sign Out
+        </Button>
+      </motion.div>
     </div>
   );
 };
@@ -3446,12 +3562,17 @@ const RoleSelection = () => {
 const LoginPage = () => {
   const { signIn, user, profile, loading } = useAuth();
   const navigate = useNavigate();
+  const location = window.location.pathname;
 
   useEffect(() => {
     if (!loading && user && profile) {
-      navigate('/dashboard');
+      // If we are on the login page but already have a profile, go to dashboard
+      // unless we were redirected from somewhere else (handled by AppContent)
+      if (location === '/login') {
+        navigate('/dashboard', { replace: true });
+      }
     }
-  }, [user, profile, loading, navigate]);
+  }, [user, profile, loading, navigate, location]);
 
   if (loading) return (
     <div className="h-screen flex items-center justify-center bg-white">
@@ -3935,6 +4056,8 @@ const AppContent = () => {
         </Routes>
       ) : !profile ? (
         <RoleSelection />
+      ) : !profile.isApproved && profile.role !== 'admin' ? (
+        <PendingApproval />
       ) : (
         <>
           <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
@@ -3957,7 +4080,8 @@ const AppContent = () => {
                 <Route path="/users" element={<UsersPage />} />
                 <Route path="/analytics" element={<AnalyticsPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
-                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                {/* Remove the catch-all redirect to dashboard to preserve current URL on refresh */}
+                <Route path="/login" element={<Navigate to="/dashboard" replace />} />
               </Routes>
             </div>
             <RoleSwitcher />
