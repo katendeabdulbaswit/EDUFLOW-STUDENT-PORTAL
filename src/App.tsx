@@ -987,8 +987,8 @@ const DEV_PROFILE: UserProfile = {
 
 const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(DEV_PROFILE);
-  const [loading, setLoading] = useState(false);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -1010,7 +1010,7 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           setProfile(newProfile);
         }
       } else {
-        setProfile(DEV_PROFILE);
+        setProfile(null);
       }
       setLoading(false);
     });
@@ -1165,7 +1165,7 @@ const Sidebar = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) 
 };
 
 const Header = ({ title, onMenuClick }: { title: string, onMenuClick: () => void }) => {
-  const { profile } = useAuth();
+  const { profile, signOut } = useAuth();
   const notifications = useCollection<AppNotification>(
     'notifications', 
     (data) => data.filter(n => !n.read),
@@ -1191,11 +1191,16 @@ const Header = ({ title, onMenuClick }: { title: string, onMenuClick: () => void
           )}
         </Link>
         <div className="h-8 w-px bg-gray-200 hidden sm:block" />
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-bold">
-            {profile?.name?.charAt(0) || 'U'}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-bold">
+              {profile?.name?.charAt(0) || 'U'}
+            </div>
+            <span className="text-sm font-medium text-gray-700 hidden sm:block">{profile?.name}</span>
           </div>
-          <span className="text-sm font-medium text-gray-700 hidden sm:block">{profile?.name}</span>
+          <Button variant="ghost" size="sm" className="text-gray-500 hover:text-red-600 hidden sm:flex" onClick={signOut}>
+            <LogOut size={16} />
+          </Button>
         </div>
       </div>
     </header>
@@ -3328,7 +3333,7 @@ const SettingsPage = () => {
   );
 };
 
-const LandingPage = () => {
+const LoginPage = () => {
   const { signIn, user, profile, loading } = useAuth();
   const navigate = useNavigate();
 
@@ -3338,53 +3343,118 @@ const LandingPage = () => {
     }
   }, [user, profile, loading, navigate]);
 
-  if (loading) return <div className="h-screen flex items-center justify-center">Loading...</div>;
+  if (loading) return (
+    <div className="h-screen flex items-center justify-center bg-white">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+        <p className="text-gray-500 font-medium">Authenticating...</p>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6">
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="max-w-md w-full text-center"
-      >
-        <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white mx-auto mb-6 shadow-lg shadow-indigo-200">
-          <BookOpen size={32} />
+    <div className="min-h-screen bg-white flex flex-col lg:flex-row">
+      {/* Left Side - Hero */}
+      <div className="flex-1 bg-indigo-600 p-8 lg:p-16 flex flex-col justify-between text-white relative overflow-hidden">
+        <div className="relative z-10">
+          <div className="flex items-center gap-2 font-bold text-2xl mb-12">
+            <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-indigo-600 shadow-lg">
+              <BookOpen size={24} />
+            </div>
+            EduFlow
+          </div>
+          
+          <motion.div
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.2 }}
+          >
+            <h1 className="text-4xl lg:text-6xl font-bold leading-tight mb-6">
+              Empowering Education <br />
+              <span className="text-indigo-200">Through Innovation.</span>
+            </h1>
+            <p className="text-lg lg:text-xl text-indigo-100 max-w-xl mb-8">
+              The comprehensive university management platform designed to streamline academic life for students, lecturers, and administrators.
+            </p>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-12">
+              <div className="flex items-start gap-4">
+                <div className="p-2 bg-white/10 rounded-lg">
+                  <Calendar className="text-indigo-200" size={24} />
+                </div>
+                <div>
+                  <h3 className="font-semibold">Smart Timetables</h3>
+                  <p className="text-sm text-indigo-100/80">Never miss a class with automated scheduling.</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-4">
+                <div className="p-2 bg-white/10 rounded-lg">
+                  <Brain className="text-indigo-200" size={24} />
+                </div>
+                <div>
+                  <h3 className="font-semibold">AI Study Tools</h3>
+                  <p className="text-sm text-indigo-100/80">Generate notes and flashcards with AI assistance.</p>
+                </div>
+              </div>
+            </div>
+          </motion.div>
         </div>
-        <h1 className="text-4xl font-bold text-gray-900 mb-2">EduFlow</h1>
-        <p className="text-gray-600 mb-8">The all-in-one university management platform for students, lecturers, and admins.</p>
         
-        <Card className="p-6 lg:p-8">
-          <h2 className="text-xl font-semibold mb-6">Welcome Back</h2>
-          <Button className="w-full py-6 text-lg gap-3" onClick={signIn}>
-            <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
-            Sign in with Google
-          </Button>
-          <p className="mt-6 text-xs text-gray-500">
-            By signing in, you agree to our Terms of Service and Privacy Policy.
-          </p>
-        </Card>
+        {/* Background Decoration */}
+        <div className="absolute top-0 right-0 w-96 h-96 bg-white/5 rounded-full -translate-y-1/2 translate-x-1/2 blur-3xl" />
+        <div className="absolute bottom-0 left-0 w-64 h-64 bg-indigo-500/20 rounded-full translate-y-1/2 -translate-x-1/2 blur-3xl" />
+      </div>
 
-        <div className="mt-12 grid grid-cols-3 gap-4">
-          <div className="text-center">
-            <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 mx-auto mb-2">
-              <Users size={20} />
-            </div>
-            <p className="text-xs font-medium text-gray-700">Students</p>
+      {/* Right Side - Login */}
+      <div className="flex-1 flex items-center justify-center p-8 lg:p-16 bg-gray-50">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="max-w-md w-full"
+        >
+          <div className="text-center mb-10">
+            <h2 className="text-3xl font-bold text-gray-900 mb-2">Welcome Back</h2>
+            <p className="text-gray-600">Please sign in to access your account</p>
           </div>
-          <div className="text-center">
-            <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center text-purple-600 mx-auto mb-2">
-              <UserIcon size={20} />
+          
+          <Card className="p-8 shadow-xl shadow-gray-200/50 border-none">
+            <div className="space-y-6">
+              <Button 
+                className="w-full py-7 text-lg gap-3 bg-white text-gray-700 border-2 border-gray-100 hover:bg-gray-50 hover:border-gray-200 transition-all shadow-sm" 
+                onClick={signIn}
+              >
+                <img src="https://www.google.com/favicon.ico" className="w-6 h-6" alt="Google" />
+                Continue with Google
+              </Button>
+              
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-gray-200"></div>
+                </div>
+                <div className="relative flex justify-center text-sm">
+                  <span className="px-4 bg-white text-gray-500">Secure Access</span>
+                </div>
+              </div>
+              
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 text-sm text-gray-600">
+                  <CheckCircle className="text-green-500" size={18} />
+                  <span>Single Sign-On (SSO) enabled</span>
+                </div>
+                <div className="flex items-center gap-3 text-sm text-gray-600">
+                  <CheckCircle className="text-green-500" size={18} />
+                  <span>Automatic profile synchronization</span>
+                </div>
+              </div>
             </div>
-            <p className="text-xs font-medium text-gray-700">Lecturers</p>
-          </div>
-          <div className="text-center">
-            <div className="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center text-orange-600 mx-auto mb-2">
-              <Settings size={20} />
-            </div>
-            <p className="text-xs font-medium text-gray-700">Admins</p>
-          </div>
-        </div>
-      </motion.div>
+          </Card>
+          
+          <p className="mt-8 text-center text-sm text-gray-500">
+            By continuing, you agree to EduFlow's <br />
+            <a href="#" className="text-indigo-600 hover:underline font-medium">Terms of Service</a> and <a href="#" className="text-indigo-600 hover:underline font-medium">Privacy Policy</a>.
+          </p>
+        </motion.div>
+      </div>
     </div>
   );
 };
@@ -3735,40 +3805,54 @@ const AppContent = () => {
     seedDemoCourse();
   }, [profile]);
 
-  if (loading) return <div className="h-screen flex items-center justify-center">Loading...</div>;
-
-  if (!profile) return <LandingPage />;
+  if (loading) return (
+    <div className="h-screen flex items-center justify-center bg-white">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+        <p className="text-gray-500 font-medium animate-pulse">Initializing EduFlow...</p>
+      </div>
+    </div>
+  );
 
   const pageTitle = window.location.pathname.split('/')[1]?.charAt(0).toUpperCase() + window.location.pathname.split('/')[1]?.slice(1) || 'Dashboard';
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
-      <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
-      <main className="flex-1 lg:ml-64 min-h-screen w-full">
-        <Header title={pageTitle} onMenuClick={() => setIsSidebarOpen(true)} />
-        <div className="max-w-7xl mx-auto">
-          <Routes>
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/courses" element={<CoursesPage />} />
-            <Route path="/students" element={<StudentsPage />} />
-            <Route path="/lecturers" element={<LecturersPage />} />
-            <Route path="/timetable" element={<TimetablePage />} />
-            <Route path="/resources" element={<ResourcesPage />} />
-            <Route path="/attendance" element={<AttendancePage />} />
-            <Route path="/results" element={<ResultsPage />} />
-            <Route path="/announcements" element={<AnnouncementsPage />} />
-            <Route path="/notifications" element={<NotificationsPage />} />
-            <Route path="/notes" element={<NotesPage />} />
-            <Route path="/flashcards" element={<FlashcardsPage />} />
-            <Route path="/users" element={<UsersPage />} />
-            <Route path="/analytics" element={<AnalyticsPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="*" element={<Navigate to="/dashboard" />} />
-          </Routes>
-        </div>
-        <RoleSwitcher />
-        {profile && <AIAssistant />}
-      </main>
+      {!profile ? (
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      ) : (
+        <>
+          <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
+          <main className="flex-1 lg:ml-64 min-h-screen w-full">
+            <Header title={pageTitle} onMenuClick={() => setIsSidebarOpen(true)} />
+            <div className="max-w-7xl mx-auto">
+              <Routes>
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/courses" element={<CoursesPage />} />
+                <Route path="/students" element={<StudentsPage />} />
+                <Route path="/lecturers" element={<LecturersPage />} />
+                <Route path="/timetable" element={<TimetablePage />} />
+                <Route path="/resources" element={<ResourcesPage />} />
+                <Route path="/attendance" element={<AttendancePage />} />
+                <Route path="/results" element={<ResultsPage />} />
+                <Route path="/announcements" element={<AnnouncementsPage />} />
+                <Route path="/notifications" element={<NotificationsPage />} />
+                <Route path="/notes" element={<NotesPage />} />
+                <Route path="/flashcards" element={<FlashcardsPage />} />
+                <Route path="/users" element={<UsersPage />} />
+                <Route path="/analytics" element={<AnalyticsPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              </Routes>
+            </div>
+            <RoleSwitcher />
+            {profile && <AIAssistant />}
+          </main>
+        </>
+      )}
     </div>
   );
 };
