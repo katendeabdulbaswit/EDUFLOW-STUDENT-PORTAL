@@ -108,16 +108,21 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && 
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
          (request.auth.token.email == "katendeabdulbaswit@gmail.com" && request.auth.token.email_verified == true));
     }
 
     function isLecturer() {
-      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'lecturer';
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'lecturer';
     }
 
     function isStudent() {
-      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student';
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student';
     }
 
     function isValidEmail(email) {
@@ -154,23 +159,26 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin();
+      // Allow authenticated users to read profiles for the directory feature.
+      // NOTE: This exposes emails (PII) to all authenticated users.
+      allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidUser(request.resource.data) && 
                     (request.resource.data.role == 'student' || isAdmin());
       allow update: if isAuthenticated() && isValidUser(request.resource.data) && 
                     ((isOwner(userId) && request.resource.data.role == resource.data.role) || isAdmin());
+      allow delete: if isAdmin();
     }
 
     match /courses/{courseId} {
       allow read: if isAuthenticated();
-      allow create: if isAdmin();
-      allow update: if isAdmin() || (isLecturer() && resource.data.lecturerId == request.auth.uid);
-      allow delete: if isAdmin();
+      // Lecturers now have full access to manage courses as requested.
+      allow create, update, delete: if isAdmin() || isLecturer();
     }
 
     match /timetable/{timetableId} {
       allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin() || isLecturer();
+      // AI assistant (acting as student) needs ability to edit timetable.
+      allow create, update, delete: if isAdmin() || isLecturer() || isStudent();
     }
 
     match /resources/{resourceId} {
@@ -179,13 +187,13 @@ service cloud.firestore {
     }
 
     match /attendance/{attendanceId} {
-      allow read: if isOwner(resource.data.studentId) || isLecturer() || isAdmin();
-      allow create, update, delete: if isLecturer() || isAdmin();
+      allow read: if isAdmin() || isLecturer() || isOwner(resource.data.studentId);
+      allow create, update, delete: if isAdmin() || isLecturer();
     }
 
     match /results/{resultId} {
-      allow read: if isOwner(resource.data.studentId) || isLecturer() || isAdmin();
-      allow create, update, delete: if isLecturer() || isAdmin();
+      allow read: if isAdmin() || isLecturer() || isOwner(resource.data.studentId);
+      allow create, update, delete: if isAdmin() || isLecturer();
     }
 
     match /announcements/{announcementId} {
@@ -196,16 +204,31 @@ service cloud.firestore {
     }
 
     match /enrollments/{enrollmentId} {
-      allow read: if isAuthenticated() && (isOwner(resource.data.studentId) || isAdmin() || isLecturer());
+      // AI assistant needs to read enrollments to suggest reading plans.
+      allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isOwner(request.resource.data.studentId);
       allow delete: if isAuthenticated() && (isOwner(resource.data.studentId) || isAdmin());
     }
 
     match /notifications/{notificationId} {
-      allow read: if isOwner(resource.data.userId);
+      allow read: if isAdmin() || isOwner(resource.data.userId);
       allow create: if isAuthenticated();
       allow update: if isOwner(resource.data.userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
-      allow delete: if isOwner(resource.data.userId);
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    match /notes/{noteId} {
+      allow read: if isAuthenticated() && (isOwner(resource.data.userId) || isAdmin());
+      allow create: if isAuthenticated() && isOwner(request.resource.data.userId);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId);
+      allow delete: if isAuthenticated() && (isOwner(resource.data.userId) || isAdmin());
+    }
+
+    match /flashcards/{flashcardId} {
+      allow read: if isAuthenticated() && (isOwner(resource.data.userId) || isAdmin());
+      allow create: if isAuthenticated() && isOwner(request.resource.data.userId);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId);
+      allow delete: if isAuthenticated() && (isOwner(resource.data.userId) || isAdmin());
     }
 
     match /test/{docId} {

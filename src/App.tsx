@@ -1,9 +1,9 @@
 import React, { useState, useEffect, createContext, useContext, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useNavigate } from 'react-router-dom';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, serverTimestamp, getDocs } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, serverTimestamp, getDocs, Query } from 'firebase/firestore';
 import { auth, db, signInWithGoogle, logout, handleFirestoreError, OperationType } from './firebase';
-import { UserProfile, Course, TimetableEntry, Resource, AttendanceRecord, Result, Announcement, UserRole, Enrollment, AppNotification } from './types';
+import { UserProfile, Course, TimetableEntry, Resource, AttendanceRecord, Result, Announcement, UserRole, Enrollment, AppNotification, Note, Flashcard } from './types';
 import { 
   LayoutDashboard, 
   Calendar, 
@@ -32,11 +32,24 @@ import {
   Filter,
   Info,
   Menu,
+  Minus,
   X,
-  Check
+  Check,
+  Headphones,
+  Library,
+  Music,
+  Play,
+  Pause,
+  Volume2,
+  FileSearch,
+  Brain,
+  StickyNote,
+  Notebook
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { 
   BarChart, 
   Bar, 
@@ -76,7 +89,39 @@ const MOCK_DATA = {
   courses: [
     { id: 'demo-robotics', name: 'Introduction to Robotics', code: 'ROB101', lecturerId: 'dev-user-id', description: 'A foundational course on robotics, covering sensors, actuators, and control systems. Students will learn about robot kinematics, dynamics, and basic control algorithms.' },
     { id: 'demo-cs101', name: 'Computer Science 101', code: 'CS101', lecturerId: 'dev-user-id', description: 'Introduction to programming and computer science concepts. This course covers the basics of Python, data structures, and algorithmic thinking.' },
-    { id: 'demo-ai', name: 'Artificial Intelligence', code: 'AI301', lecturerId: 'student-1', description: 'Exploration of AI techniques including machine learning, neural networks, and natural language processing.' },
+    { 
+      id: 'demo-ai', 
+      name: 'Artificial Intelligence', 
+      code: 'AI301', 
+      lecturerId: 'student-1', 
+      description: 'Exploration of AI techniques including machine learning, neural networks, and natural language processing.',
+      outline: [
+        {
+          id: 'm1',
+          title: 'Module 1: Introduction to AI',
+          topics: ['History of AI', 'Intelligent Agents', 'State Space Search'],
+          readings: ['Artificial Intelligence: A Modern Approach (Russell & Norvig), Chapter 1-3']
+        },
+        {
+          id: 'm2',
+          title: 'Module 2: Machine Learning Foundations',
+          topics: ['Supervised vs Unsupervised Learning', 'Linear Regression', 'Decision Trees'],
+          readings: ['Pattern Recognition and Machine Learning (Bishop), Chapter 1']
+        },
+        {
+          id: 'm3',
+          title: 'Module 3: Neural Networks and Deep Learning',
+          topics: ['Perceptrons', 'Backpropagation', 'Convolutional Neural Networks (CNNs)'],
+          readings: ['Deep Learning (Goodfellow et al.), Chapter 6-9']
+        },
+        {
+          id: 'm4',
+          title: 'Module 4: Natural Language Processing',
+          topics: ['Tokenization', 'Word Embeddings', 'Transformers'],
+          readings: ['Speech and Language Processing (Jurafsky & Martin), Chapter 2-4']
+        }
+      ]
+    },
   ],
   timetable: [
     { id: 't1', courseId: 'demo-robotics', courseName: 'Introduction to Robotics', day: 'Monday', startTime: '09:00', endTime: '11:00', room: 'Lab 1' },
@@ -102,10 +147,16 @@ const MOCK_DATA = {
     { uid: 'student-2', name: 'Jane Doe', email: 'jane@example.com', role: 'student', isApproved: true },
   ],
   enrollments: [],
-  notifications: []
+  notifications: [],
+  notes: [],
+  flashcards: []
 };
 
-const useCollection = <T extends { id?: string; uid?: string }>(collectionName: keyof typeof MOCK_DATA, queryFn?: (data: T[]) => T[]) => {
+const useCollection = <T extends { id?: string; uid?: string }>(
+  collectionName: keyof typeof MOCK_DATA, 
+  queryFn?: (data: T[]) => T[],
+  firestoreQuery?: Query
+) => {
   const [data, setData] = useState<T[]>(MOCK_DATA[collectionName] as T[]);
   const [loading, setLoading] = useState(true);
   const queryFnRef = useRef(queryFn);
@@ -115,11 +166,10 @@ const useCollection = <T extends { id?: string; uid?: string }>(collectionName: 
   }, [queryFn]);
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, collectionName), (snapshot) => {
-      if (!snapshot.empty) {
-        const firestoreData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as T));
-        setData(queryFnRef.current ? queryFnRef.current(firestoreData) : firestoreData);
-      }
+    const q = firestoreQuery || collection(db, collectionName);
+    const unsub = onSnapshot(q, (snapshot) => {
+      const firestoreData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as T));
+      setData(queryFnRef.current ? queryFnRef.current(firestoreData) : firestoreData);
       setLoading(false);
     }, (err) => {
       console.warn(`Firestore ${collectionName} failed (offline mode):`, err);
@@ -127,7 +177,7 @@ const useCollection = <T extends { id?: string; uid?: string }>(collectionName: 
       setLoading(false);
     });
     return unsub;
-  }, [collectionName]);
+  }, [collectionName, firestoreQuery]);
 
   return data;
 };
@@ -263,17 +313,120 @@ const Badge = ({ children, variant = 'default', className }: { children: React.R
 
 // --- AI Assistant ---
 const AIAssistant = () => {
+  const { profile } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'chat' | 'sources'>('chat');
   const [messages, setMessages] = useState<{ role: 'user' | 'ai'; content: string }[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const [selectedSources, setSelectedSources] = useState<string[]>([]);
+  const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  
+  const timetable = useCollection<TimetableEntry>(
+    'timetable', 
+    undefined,
+    profile?.role === 'student' 
+      ? query(collection(db, 'timetable'), where('userId', '==', profile.uid))
+      : undefined
+  );
+  const courses = useCollection<Course>('courses');
+  const enrollments = useCollection<Enrollment>('enrollments');
+  const resources = useCollection<Resource>('resources');
+  const notifications = useCollection<AppNotification>(
+    'notifications', 
+    undefined,
+    profile ? query(collection(db, 'notifications'), where('userId', '==', profile.uid)) : undefined
+  );
+  const notes = useCollection<Note>(
+    'notes', 
+    undefined,
+    profile ? query(collection(db, 'notes'), where('userId', '==', profile.uid)) : undefined
+  );
+  const flashcards = useCollection<Flashcard>(
+    'flashcards', 
+    undefined,
+    profile ? query(collection(db, 'flashcards'), where('userId', '==', profile.uid)) : undefined
+  );
+
+  const studentCourses = courses.filter(c => enrollments.some(e => e.courseId === c.id && e.studentId === profile?.uid));
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, isTyping]);
+
+  const generateAudioOverview = async () => {
+    if (selectedSources.length === 0) return alert('Please select at least one source first.');
+    setIsGeneratingAudio(true);
+    setAudioUrl(null);
+
+    try {
+      const { GoogleGenAI, Modality } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+
+      const sourceContent = selectedSources.map(id => {
+        const course = courses.find(c => c.id === id);
+        if (course) {
+          return `Course: ${course.name} (${course.code})\nDescription: ${course.description}\nOutline: ${JSON.stringify(course.outline || [])}`;
+        }
+        const resource = resources.find(r => r.id === id);
+        if (resource) {
+          return `Resource: ${resource.title} (Type: ${resource.type})`;
+        }
+        const note = notes.find(n => n.id === id);
+        if (note) {
+          return `Note: ${note.title}\nContent: ${note.content}`;
+        }
+        const flashcard = flashcards.find(f => f.id === id);
+        if (flashcard) {
+          return `Flashcard: Front: ${flashcard.front}, Back: ${flashcard.back}`;
+        }
+        return '';
+      }).join('\n\n');
+
+      const prompt = `Generate a 2-speaker podcast-style conversation between "Alex" and "Jordan" summarizing the following course materials. 
+      Alex is enthusiastic and Jordan is more analytical. 
+      They should discuss the key topics, modules, and how they relate to each other.
+      Keep it engaging and educational.
+      
+      Materials:
+      ${sourceContent}`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: prompt }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Kore' }
+            }
+          }
+        }
+      });
+
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+        const binary = atob(base64Audio);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: 'audio/wav' });
+        const url = URL.createObjectURL(blob);
+        setAudioUrl(url);
+      }
+    } catch (error) {
+      console.error('Audio Generation Error:', error);
+      alert('Failed to generate audio overview. Please try again.');
+    } finally {
+      setIsGeneratingAudio(false);
+    }
+  };
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -285,22 +438,301 @@ const AIAssistant = () => {
     setIsTyping(true);
 
     try {
-      const { GoogleGenAI } = await import('@google/genai');
+      const { GoogleGenAI, Type } = await import('@google/genai');
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+
+      const tools = [
+        {
+          functionDeclarations: [
+            {
+              name: "get_timetable_markdown",
+              description: "Get the current timetable formatted as a markdown table.",
+              parameters: { type: Type.OBJECT, properties: {} }
+            },
+            {
+              name: "get_timetable",
+              description: "Get the current timetable for the student.",
+              parameters: { type: Type.OBJECT, properties: {} }
+            },
+            {
+              name: "add_timetable_entry",
+              description: "Add a new entry to the timetable.",
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  courseId: { type: Type.STRING, description: "The ID of the course." },
+                  day: { type: Type.STRING, enum: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] },
+                  startTime: { type: Type.STRING, description: "Start time in HH:MM format." },
+                  endTime: { type: Type.STRING, description: "End time in HH:MM format." },
+                  room: { type: Type.STRING, description: "The room location." }
+                },
+                required: ["courseId", "day", "startTime", "endTime", "room"]
+              }
+            },
+            {
+              name: "update_timetable_entry",
+              description: "Update an existing timetable entry.",
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING, description: "The ID of the timetable entry to update." },
+                  courseId: { type: Type.STRING },
+                  day: { type: Type.STRING, enum: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] },
+                  startTime: { type: Type.STRING },
+                  endTime: { type: Type.STRING },
+                  room: { type: Type.STRING }
+                },
+                required: ["id"]
+              }
+            },
+            {
+              name: "delete_timetable_entry",
+              description: "Delete a timetable entry.",
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING, description: "The ID of the timetable entry to delete." }
+                },
+                required: ["id"]
+              }
+            },
+            {
+              name: "get_courses",
+              description: "Get the list of all available courses.",
+              parameters: { type: Type.OBJECT, properties: {} }
+            },
+            {
+              name: "get_student_enrollments",
+              description: "Get the courses the current student is enrolled in.",
+              parameters: { type: Type.OBJECT, properties: {} }
+            },
+            {
+              name: "get_notifications",
+              description: "Get the current notifications for the user.",
+              parameters: { type: Type.OBJECT, properties: {} }
+            },
+            {
+              name: "delete_notification",
+              description: "Delete a notification.",
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING, description: "The ID of the notification to delete." }
+                },
+                required: ["id"]
+              }
+            },
+            {
+              name: "add_note",
+              description: "Add a new study note.",
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  courseId: { type: Type.STRING, description: "The ID of the course." },
+                  title: { type: Type.STRING, description: "The title of the note." },
+                  content: { type: Type.STRING, description: "The content of the note." }
+                },
+                required: ["courseId", "title", "content"]
+              }
+            },
+            {
+              name: "get_notes",
+              description: "Get all study notes for the current student.",
+              parameters: { type: Type.OBJECT, properties: {} }
+            },
+            {
+              name: "delete_note",
+              description: "Delete a study note.",
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING, description: "The ID of the note to delete." }
+                },
+                required: ["id"]
+              }
+            },
+            {
+              name: "add_flashcard",
+              description: "Add a new study flashcard.",
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  courseId: { type: Type.STRING, description: "The ID of the course." },
+                  front: { type: Type.STRING, description: "The front side of the flashcard (question)." },
+                  back: { type: Type.STRING, description: "The back side of the flashcard (answer)." }
+                },
+                required: ["courseId", "front", "back"]
+              }
+            },
+            {
+              name: "get_flashcards",
+              description: "Get all study flashcards for the current student.",
+              parameters: { type: Type.OBJECT, properties: {} }
+            },
+            {
+              name: "delete_flashcard",
+              description: "Delete a study flashcard.",
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING, description: "The ID of the flashcard to delete." }
+                },
+                required: ["id"]
+              }
+            }
+          ]
+        }
+      ];
+
+      const sourceContent = selectedSources.map(id => {
+        const course = courses.find(c => c.id === id);
+        if (course) return `Course: ${course.name} (${course.code})\nDescription: ${course.description}\nOutline: ${JSON.stringify(course.outline || [])}`;
+        const resource = resources.find(r => r.id === id);
+        if (resource) return `Resource: ${resource.title} (Type: ${resource.type})`;
+        const note = notes.find(n => n.id === id);
+        if (note) return `Note: ${note.title}\nContent: ${note.content}`;
+        const flashcard = flashcards.find(f => f.id === id);
+        if (flashcard) return `Flashcard: Front: ${flashcard.front}, Back: ${flashcard.back}`;
+        return '';
+      }).join('\n\n');
+
+      const systemInstruction = `You are EduFlow AI, a helpful university study assistant with NotebookLM-style features.
+      You have access to the student's timetable, courses, and enrollments.
+      The current user is ${profile?.name} (${profile?.email}) with role ${profile?.role}.
+      
+      GROUNDING SOURCES:
+      ${selectedSources.length > 0 ? `The user has selected the following sources to ground your answers in:\n${sourceContent}` : "No specific sources selected. Use general knowledge or tools."}
+      
+      CAPABILITIES:
+      - You can suggest reading plans, manage the timetable, and answer academic questions.
+      - You can MANIPULATE the timetable: add, update, and delete entries.
+      - You can MANAGE notifications: view and delete them.
+      - You can CREATE and MANAGE study notes and flashcards.
+      - You can ANALYZE notes and course materials to generate flashcards or summaries.
+      - You can provide VISUAL TIMETABLES using markdown tables.
+      
+      GUIDELINES:
+      - When asked for a timetable, ALWAYS use the 'get_timetable_markdown' tool or format the data into a clear markdown table yourself.
+      - When adding or updating timetable entries, ensure the courseId is valid (use 'get_courses' if unsure).
+      - Always prioritize information from the selected sources if available.
+      - Be encouraging and professional.`;
 
       const result = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: [{ role: 'user', parts: [{ text: `You are a helpful university study assistant. Help the student with their query: ${userMsg}` }] }],
+        contents: [{ role: 'user', parts: [{ text: userMsg }] }],
+        config: {
+          systemInstruction,
+          tools,
+        }
       });
 
-      const response = result.text;
-      setMessages(prev => [...prev, { role: 'ai', content: response || "I'm sorry, I couldn't generate a response." }]);
+      let responseText = result.text;
+      const functionCalls = result.functionCalls;
+
+      if (functionCalls) {
+        const functionResponses = [];
+        for (const call of functionCalls) {
+          let functionResult;
+          if (call.name === "get_timetable_markdown") {
+            const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+            let md = "| Day | Time | Course | Room |\n| --- | --- | --- | --- |\n";
+            const sortedEntries = [...timetable].sort((a, b) => {
+              const dayDiff = days.indexOf(a.day) - days.indexOf(b.day);
+              if (dayDiff !== 0) return dayDiff;
+              return a.startTime.localeCompare(b.startTime);
+            });
+            sortedEntries.forEach(e => {
+              md += `| ${e.day} | ${e.startTime} - ${e.endTime} | ${e.courseName} | ${e.room} |\n`;
+            });
+            functionResult = md;
+          } else if (call.name === "get_timetable") {
+            functionResult = timetable;
+          } else if (call.name === "get_courses") {
+            functionResult = courses;
+          } else if (call.name === "get_student_enrollments") {
+            const studentEnrollments = enrollments.filter(e => e.studentId === profile?.uid);
+            functionResult = courses.filter(c => studentEnrollments.some(e => e.courseId === c.id));
+          } else if (call.name === "get_notifications") {
+            functionResult = notifications;
+          } else if (call.name === "add_timetable_entry") {
+            const course = courses.find(c => c.id === call.args.courseId);
+            const data = { 
+              ...call.args, 
+              courseName: course?.name || 'Unknown Course',
+              userId: profile?.uid,
+              createdAt: new Date().toISOString()
+            };
+            const docRef = await addDoc(collection(db, 'timetable'), data);
+            await updateDoc(docRef, { id: docRef.id });
+            functionResult = { status: "success", message: "Timetable entry added." };
+          } else if (call.name === "update_timetable_entry") {
+            const { id, ...data } = call.args;
+            if (data.courseId) {
+              const course = courses.find(c => c.id === data.courseId);
+              (data as any).courseName = course?.name || 'Unknown Course';
+            }
+            await updateDoc(doc(db, 'timetable', id as string), data);
+            functionResult = { status: "success", message: "Timetable entry updated." };
+          } else if (call.name === "delete_timetable_entry") {
+            await deleteDoc(doc(db, 'timetable', call.args.id as string));
+            functionResult = { status: "success", message: "Timetable entry deleted." };
+          } else if (call.name === "delete_notification") {
+            await deleteDoc(doc(db, 'notifications', call.args.id as string));
+            functionResult = { status: "success", message: "Notification deleted." };
+          } else if (call.name === "add_note") {
+            const data = { ...call.args, userId: profile?.uid, createdAt: new Date().toISOString() };
+            const docRef = await addDoc(collection(db, 'notes'), data);
+            await updateDoc(docRef, { id: docRef.id });
+            functionResult = { status: "success", message: "Note added." };
+          } else if (call.name === "get_notes") {
+            functionResult = notes.filter(n => n.userId === profile?.uid);
+          } else if (call.name === "delete_note") {
+            await deleteDoc(doc(db, 'notes', call.args.id as string));
+            functionResult = { status: "success", message: "Note deleted." };
+          } else if (call.name === "add_flashcard") {
+            const data = { ...call.args, userId: profile?.uid, createdAt: new Date().toISOString() };
+            const docRef = await addDoc(collection(db, 'flashcards'), data);
+            await updateDoc(docRef, { id: docRef.id });
+            functionResult = { status: "success", message: "Flashcard added." };
+          } else if (call.name === "get_flashcards") {
+            functionResult = flashcards.filter(f => f.userId === profile?.uid);
+          } else if (call.name === "delete_flashcard") {
+            await deleteDoc(doc(db, 'flashcards', call.args.id as string));
+            functionResult = { status: "success", message: "Flashcard deleted." };
+          }
+          
+          functionResponses.push({
+            name: call.name,
+            response: { result: functionResult },
+            id: call.id
+          });
+        }
+
+        const finalResult = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: [
+            { role: 'user', parts: [{ text: userMsg }] },
+            result.candidates[0].content,
+            { role: 'user', parts: functionResponses.map(res => ({ functionResponse: res })) }
+          ],
+          config: { systemInstruction, tools }
+        });
+        responseText = finalResult.text;
+      }
+
+      setMessages(prev => [...prev, { role: 'ai', content: responseText || "I've processed your request." }]);
     } catch (error) {
       console.error('AI Error:', error);
       setMessages(prev => [...prev, { role: 'ai', content: "Sorry, I'm having trouble connecting right now. Please try again later." }]);
     } finally {
       setIsTyping(false);
     }
+  };
+
+  const toggleSource = (id: string) => {
+    setSelectedSources(prev => 
+      prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
+    );
   };
 
   return (
@@ -318,60 +750,225 @@ const AIAssistant = () => {
             initial={{ opacity: 0, y: 20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.95 }}
-            className="fixed bottom-24 right-6 w-96 h-[500px] bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden z-40"
+            className="fixed bottom-24 right-6 w-96 h-[600px] bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden z-40"
           >
-            <div className="p-4 bg-indigo-600 text-white flex items-center gap-3">
-              <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
-                <Bot size={20} />
+            <div className="p-4 bg-indigo-600 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
+                  <Bot size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm">EduFlow Notebook AI</h3>
+                  <p className="text-[10px] text-white/70">Grounded Study Assistant</p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-bold text-sm">EduFlow AI Assistant</h3>
-                <p className="text-[10px] text-white/70">Study Guide & Assistance</p>
+              <div className="flex gap-1">
+                <button 
+                  onClick={() => setActiveTab('chat')}
+                  className={cn("p-2 rounded-lg transition-colors", activeTab === 'chat' ? "bg-white/20" : "hover:bg-white/10")}
+                >
+                  <Send size={16} />
+                </button>
+                <button 
+                  onClick={() => setActiveTab('sources')}
+                  className={cn("p-2 rounded-lg transition-colors", activeTab === 'sources' ? "bg-white/20" : "hover:bg-white/10")}
+                >
+                  <Library size={16} />
+                </button>
               </div>
             </div>
 
-            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
-              {messages.length === 0 && (
-                <div className="text-center py-10 space-y-2">
-                  <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto">
-                    <Sparkles size={24} />
-                  </div>
-                  <p className="text-sm font-medium text-gray-900">How can I help you today?</p>
-                  <p className="text-xs text-gray-500 px-6">Ask me about your courses, study tips, or any academic questions!</p>
+            {activeTab === 'chat' ? (
+              <>
+                <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50" ref={scrollRef}>
+                  {messages.length === 0 && (
+                    <div className="text-center py-10 space-y-2">
+                      <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto">
+                        <Sparkles size={24} />
+                      </div>
+                      <p className="text-sm font-medium text-gray-900">Welcome to your Notebook</p>
+                      <p className="text-xs text-gray-500 px-6">Select sources in the Library tab to ground my answers in your course materials.</p>
+                    </div>
+                  )}
+                  {messages.map((msg, i) => (
+                    <div key={i} className={cn("flex", msg.role === 'user' ? "justify-end" : "justify-start")}>
+                      <div className={cn(
+                        "max-w-[85%] p-3 rounded-2xl text-sm shadow-sm",
+                        msg.role === 'user' ? "bg-indigo-600 text-white rounded-tr-none" : "bg-white text-gray-800 border border-gray-200 rounded-tl-none"
+                      )}>
+                        {msg.role === 'ai' ? (
+                          <div className="prose prose-sm max-w-none prose-indigo prose-p:leading-relaxed prose-table:border-collapse prose-th:border prose-th:p-2 prose-td:border prose-td:p-2">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                          </div>
+                        ) : (
+                          msg.content
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {isTyping && (
+                    <div className="flex justify-start">
+                      <div className="bg-white border border-gray-200 p-3 rounded-2xl rounded-tl-none shadow-sm flex gap-1">
+                        <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce" />
+                        <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce [animation-delay:0.2s]" />
+                        <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce [animation-delay:0.4s]" />
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-              {messages.map((msg, i) => (
-                <div key={i} className={cn("flex", msg.role === 'user' ? "justify-end" : "justify-start")}>
-                  <div className={cn(
-                    "max-w-[80%] p-3 rounded-2xl text-sm shadow-sm",
-                    msg.role === 'user' ? "bg-indigo-600 text-white rounded-tr-none" : "bg-white text-gray-800 border border-gray-200 rounded-tl-none"
-                  )}>
-                    {msg.content}
-                  </div>
-                </div>
-              ))}
-              {isTyping && (
-                <div className="flex justify-start">
-                  <div className="bg-white border border-gray-200 p-3 rounded-2xl rounded-tl-none shadow-sm flex gap-1">
-                    <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce" />
-                    <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce [animation-delay:0.2s]" />
-                    <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce [animation-delay:0.4s]" />
-                  </div>
-                </div>
-              )}
-            </div>
 
-            <form onSubmit={handleSend} className="p-4 bg-white border-t border-gray-100 flex gap-2">
-              <Input
-                placeholder="Type your question..."
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                className="flex-1"
-              />
-              <Button type="submit" size="sm" disabled={isTyping}>
-                <Send size={18} />
-              </Button>
-            </form>
+                <form onSubmit={handleSend} className="p-4 bg-white border-t border-gray-100 flex gap-2">
+                  <Input
+                    placeholder={selectedSources.length > 0 ? "Ask about your sources..." : "Type your question..."}
+                    value={input}
+                    onChange={e => setInput(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button type="submit" size="sm" disabled={isTyping}>
+                    <Send size={18} />
+                  </Button>
+                </form>
+              </>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-gray-50">
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <h4 className="font-bold text-gray-900 flex items-center gap-2">
+                      <Library size={18} className="text-indigo-600" />
+                      Sources ({selectedSources.length})
+                    </h4>
+                    <Button 
+                      size="sm" 
+                      variant="outline" 
+                      className="h-8 text-xs gap-2"
+                      onClick={generateAudioOverview}
+                      disabled={isGeneratingAudio || selectedSources.length === 0}
+                    >
+                      {isGeneratingAudio ? (
+                        <div className="w-3 h-3 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Headphones size={14} />
+                      )}
+                      Audio Overview
+                    </Button>
+                  </div>
+
+                  {audioUrl && (
+                    <div className="mb-6 p-3 bg-indigo-50 rounded-xl border border-indigo-100 flex items-center gap-3">
+                      <div className="w-10 h-10 bg-indigo-600 text-white rounded-full flex items-center justify-center">
+                        <Music size={20} />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-xs font-bold text-indigo-900">Audio Overview Ready</p>
+                        <audio ref={audioRef} src={audioUrl} controls className="h-8 w-full mt-1" />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Your Courses</p>
+                    {studentCourses.map(course => (
+                      <div 
+                        key={course.id}
+                        onClick={() => toggleSource(course.id)}
+                        className={cn(
+                          "p-3 rounded-xl border cursor-pointer transition-all flex items-center justify-between",
+                          selectedSources.includes(course.id) 
+                            ? "bg-indigo-50 border-indigo-200" 
+                            : "bg-white border-gray-100 hover:border-indigo-100 shadow-sm"
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center", selectedSources.includes(course.id) ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-400")}>
+                            <BookOpen size={16} />
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold text-gray-900">{course.name}</p>
+                            <p className="text-[10px] text-gray-500">{course.code}</p>
+                          </div>
+                        </div>
+                        {selectedSources.includes(course.id) && <Check size={16} className="text-indigo-600" />}
+                      </div>
+                    ))}
+
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mt-6">Resources</p>
+                    {resources.filter(r => studentCourses.some(c => c.id === r.courseId)).map(res => (
+                      <div 
+                        key={res.id}
+                        onClick={() => toggleSource(res.id)}
+                        className={cn(
+                          "p-3 rounded-xl border cursor-pointer transition-all flex items-center justify-between",
+                          selectedSources.includes(res.id) 
+                            ? "bg-indigo-50 border-indigo-200" 
+                            : "bg-white border-gray-100 hover:border-indigo-100 shadow-sm"
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center", selectedSources.includes(res.id) ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-400")}>
+                            <FileText size={16} />
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold text-gray-900">{res.title}</p>
+                            <p className="text-[10px] text-gray-500 uppercase">{res.type}</p>
+                          </div>
+                        </div>
+                        {selectedSources.includes(res.id) && <Check size={16} className="text-indigo-600" />}
+                      </div>
+                    ))}
+
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mt-6">Your Notes</p>
+                    {notes.filter(n => n.userId === profile?.uid).map(note => (
+                      <div 
+                        key={note.id}
+                        onClick={() => toggleSource(note.id)}
+                        className={cn(
+                          "p-3 rounded-xl border cursor-pointer transition-all flex items-center justify-between",
+                          selectedSources.includes(note.id) 
+                            ? "bg-indigo-50 border-indigo-200" 
+                            : "bg-white border-gray-100 hover:border-indigo-100 shadow-sm"
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center", selectedSources.includes(note.id) ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-400")}>
+                            <StickyNote size={16} />
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold text-gray-900">{note.title}</p>
+                            <p className="text-[10px] text-gray-500">NOTE</p>
+                          </div>
+                        </div>
+                        {selectedSources.includes(note.id) && <Check size={16} className="text-indigo-600" />}
+                      </div>
+                    ))}
+
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mt-6">Flashcards</p>
+                    {flashcards.filter(f => f.userId === profile?.uid).map(fc => (
+                      <div 
+                        key={fc.id}
+                        onClick={() => toggleSource(fc.id)}
+                        className={cn(
+                          "p-3 rounded-xl border cursor-pointer transition-all flex items-center justify-between",
+                          selectedSources.includes(fc.id) 
+                            ? "bg-indigo-50 border-indigo-200" 
+                            : "bg-white border-gray-100 hover:border-indigo-100 shadow-sm"
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center", selectedSources.includes(fc.id) ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-400")}>
+                            <Brain size={16} />
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold text-gray-900">{fc.front.substring(0, 30)}...</p>
+                            <p className="text-[10px] text-gray-500">FLASHCARD</p>
+                          </div>
+                        </div>
+                        {selectedSources.includes(fc.id) && <Check size={16} className="text-indigo-600" />}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -407,6 +1004,7 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             name: firebaseUser.displayName || 'Anonymous',
             email: firebaseUser.email || '',
             role: 'student',
+            isApproved: true,
           };
           await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
           setProfile(newProfile);
@@ -460,6 +1058,8 @@ const Sidebar = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) 
       { icon: FileText, label: 'Resources', path: '/resources' },
       { icon: CheckSquare, label: 'Attendance', path: '/attendance' },
       { icon: BarChart3, label: 'Results', path: '/results' },
+      { icon: StickyNote, label: 'My Notes', path: '/notes' },
+      { icon: Brain, label: 'Flashcards', path: '/flashcards' },
       { icon: Megaphone, label: 'Announcements', path: '/announcements' },
       { icon: Bell, label: 'Notifications', path: '/notifications' },
       ...(isDeveloper ? [
@@ -484,18 +1084,13 @@ const Sidebar = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) 
       { icon: Users, label: 'Manage Users', path: '/users' },
       { icon: Users, label: 'Students', path: '/students' },
       { icon: UserIcon, label: 'Lecturers', path: '/lecturers' },
-      { icon: CheckCircle, label: 'Approve Lecturers', path: '/approvals' },
       { icon: BarChart3, label: 'Analytics', path: '/analytics' },
       { icon: Settings, label: 'System Settings', path: '/settings' },
       { icon: Bell, label: 'Notifications', path: '/notifications' },
     ],
   };
 
-  const roleItems = profile ? (
-    (profile.role === 'lecturer' && !profile.isApproved && !isDeveloper)
-      ? [{ icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' }] 
-      : menuItems[profile.role]
-  ) : [];
+  const roleItems = profile ? menuItems[profile.role] : [];
 
   const sidebarClasses = cn(
     "fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0",
@@ -571,7 +1166,11 @@ const Sidebar = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) 
 
 const Header = ({ title, onMenuClick }: { title: string, onMenuClick: () => void }) => {
   const { profile } = useAuth();
-  const notifications = useCollection<AppNotification>('notifications', (data) => data.filter(n => n.userId === profile?.uid && !n.read));
+  const notifications = useCollection<AppNotification>(
+    'notifications', 
+    (data) => data.filter(n => !n.read),
+    profile ? query(collection(db, 'notifications'), where('userId', '==', profile.uid)) : undefined
+  );
   const unreadCount = notifications.length;
 
   return (
@@ -605,21 +1204,33 @@ const Header = ({ title, onMenuClick }: { title: string, onMenuClick: () => void
 
 const TimetablePage = () => {
   const { profile } = useAuth();
-  const entries = useCollection<TimetableEntry>('timetable');
+  const entries = useCollection<TimetableEntry>(
+    'timetable', 
+    undefined,
+    profile?.role === 'student' 
+      ? query(collection(db, 'timetable'), where('userId', '==', profile.uid))
+      : undefined
+  );
   const courses = useCollection<Course>('courses');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<Partial<TimetableEntry> | null>(null);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingEntry) return;
+    if (!editingEntry || !profile) return;
     try {
       const course = courses.find(c => c.id === editingEntry.courseId);
-      const data = { ...editingEntry, courseName: course?.name || '' };
+      const data = { 
+        ...editingEntry, 
+        courseName: course?.name || '',
+        userId: profile.uid,
+        createdAt: new Date().toISOString()
+      };
       if (editingEntry.id) {
         await updateDoc(doc(db, 'timetable', editingEntry.id), data);
       } else {
-        await addDoc(collection(db, 'timetable'), data);
+        const docRef = await addDoc(collection(db, 'timetable'), data);
+        await updateDoc(docRef, { id: docRef.id });
       }
       setIsModalOpen(false);
       setEditingEntry(null);
@@ -652,7 +1263,10 @@ const TimetablePage = () => {
           <div key={day} className="space-y-4">
             <h3 className="text-lg font-semibold text-gray-700 border-b pb-2">{day}</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {entries.filter(e => e.day === day).sort((a, b) => a.startTime.localeCompare(b.startTime)).map(entry => (
+              {entries
+                .filter(e => e.day === day)
+                .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''))
+                .map(entry => (
                 <Card key={entry.id} className="p-4 border-l-4 border-l-indigo-600 relative group">
                   <div className="flex justify-between items-start">
                     <div>
@@ -859,7 +1473,11 @@ const ResourcesPage = () => {
 
 const AttendancePage = () => {
   const { profile } = useAuth();
-  const records = useCollection<AttendanceRecord>('attendance');
+  const records = useCollection<AttendanceRecord>(
+    'attendance', 
+    undefined, 
+    profile?.role === 'student' ? query(collection(db, 'attendance'), where('studentId', '==', profile.uid)) : undefined
+  );
   const courses = useCollection<Course>('courses');
   const students = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'student'));
   const [selectedCourse, setSelectedCourse] = useState('');
@@ -989,7 +1607,11 @@ const AttendancePage = () => {
 
 const ResultsPage = () => {
   const { profile } = useAuth();
-  const results = useCollection<Result>('results');
+  const results = useCollection<Result>(
+    'results', 
+    undefined, 
+    profile?.role === 'student' ? query(collection(db, 'results'), where('studentId', '==', profile.uid)) : undefined
+  );
   const courses = useCollection<Course>('courses');
   const students = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'student'));
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -1253,9 +1875,10 @@ const AnnouncementsPage = () => {
 
 const NotificationsPage = () => {
   const { profile } = useAuth();
-  const notifications = useCollection<AppNotification>('notifications', (data) => 
-    data.filter(n => n.userId === profile?.uid)
-        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+  const notifications = useCollection<AppNotification>(
+    'notifications', 
+    (data) => data.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')),
+    profile ? query(collection(db, 'notifications'), where('userId', '==', profile.uid)) : undefined
   );
 
   const markAsRead = async (id: string) => {
@@ -1347,6 +1970,290 @@ const NotificationsPage = () => {
   );
 };
 
+const NotesPage = () => {
+  const { profile } = useAuth();
+  const notes = useCollection<Note>(
+    'notes', 
+    undefined,
+    profile ? query(collection(db, 'notes'), where('userId', '==', profile.uid)) : undefined
+  );
+  const courses = useCollection<Course>('courses');
+  const [isAdding, setIsAdding] = useState(false);
+  const [newNote, setNewNote] = useState({ title: '', content: '', courseId: '' });
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profile) return;
+    try {
+      const docRef = await addDoc(collection(db, 'notes'), {
+        ...newNote,
+        userId: profile.uid,
+        createdAt: new Date().toISOString()
+      });
+      await updateDoc(docRef, { id: docRef.id });
+      setIsAdding(false);
+      setNewNote({ title: '', content: '', courseId: '' });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'notes');
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (window.confirm('Delete this note?')) {
+      try {
+        await deleteDoc(doc(db, 'notes', id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, 'notes');
+      }
+    }
+  };
+
+  return (
+    <div className="p-4 lg:p-8 space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl lg:text-2xl font-bold text-gray-900">My Study Notes</h2>
+        <Button onClick={() => setIsAdding(true)} className="gap-2">
+          <Plus size={18} /> New Note
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {notes.map(note => (
+          <Card key={note.id} className="p-6 flex flex-col h-64 hover:shadow-md transition-all border-t-4 border-t-indigo-600">
+            <div className="flex justify-between items-start mb-4">
+              <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+                <StickyNote size={20} />
+              </div>
+              <button onClick={() => handleDelete(note.id)} className="text-gray-400 hover:text-red-600">
+                <Trash2 size={18} />
+              </button>
+            </div>
+            <h3 className="font-bold text-gray-900 mb-1 truncate">{note.title}</h3>
+            <p className="text-xs text-indigo-600 font-medium mb-3">
+              {courses.find(c => c.id === note.courseId)?.name || 'General'}
+            </p>
+            <p className="text-sm text-gray-600 line-clamp-4 flex-1">{note.content}</p>
+            <p className="text-[10px] text-gray-400 mt-4">{safeFormat(note.createdAt, 'MMM d, yyyy')}</p>
+          </Card>
+        ))}
+        {notes.length === 0 && (
+          <div className="col-span-full text-center py-20 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
+            <StickyNote size={48} className="mx-auto text-gray-300 mb-4" />
+            <p className="text-gray-500 font-medium">No notes yet.</p>
+            <p className="text-sm text-gray-400">Use the AI Assistant to help you analyze materials and create notes!</p>
+          </div>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {isAdding && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl"
+            >
+              <h3 className="text-xl font-bold mb-6">Create New Note</h3>
+              <form onSubmit={handleAdd} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Course</label>
+                  <Select 
+                    required 
+                    value={newNote.courseId} 
+                    onChange={e => setNewNote({...newNote, courseId: e.target.value})}
+                  >
+                    <option value="">Select Course</option>
+                    {courses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </Select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Title</label>
+                  <Input 
+                    required 
+                    value={newNote.title} 
+                    onChange={e => setNewNote({...newNote, title: e.target.value})} 
+                    placeholder="Note Title" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Content</label>
+                  <textarea 
+                    required 
+                    className="w-full p-3 border border-gray-200 rounded-xl h-40 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    value={newNote.content} 
+                    onChange={e => setNewNote({...newNote, content: e.target.value})} 
+                    placeholder="Write your study notes here..."
+                  />
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <Button type="button" variant="outline" className="flex-1" onClick={() => setIsAdding(false)}>Cancel</Button>
+                  <Button type="submit" className="flex-1">Save Note</Button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+const FlashcardsPage = () => {
+  const { profile } = useAuth();
+  const flashcards = useCollection<Flashcard>(
+    'flashcards', 
+    undefined,
+    profile ? query(collection(db, 'flashcards'), where('userId', '==', profile.uid)) : undefined
+  );
+  const courses = useCollection<Course>('courses');
+  const [isAdding, setIsAdding] = useState(false);
+  const [newCard, setNewCard] = useState({ front: '', back: '', courseId: '' });
+  const [flipped, setFlipped] = useState<Record<string, boolean>>({});
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profile) return;
+    try {
+      const docRef = await addDoc(collection(db, 'flashcards'), {
+        ...newCard,
+        userId: profile.uid,
+        createdAt: new Date().toISOString()
+      });
+      await updateDoc(docRef, { id: docRef.id });
+      setIsAdding(false);
+      setNewCard({ front: '', back: '', courseId: '' });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'flashcards');
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (window.confirm('Delete this flashcard?')) {
+      try {
+        await deleteDoc(doc(db, 'flashcards', id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, 'flashcards');
+      }
+    }
+  };
+
+  const toggleFlip = (id: string) => {
+    setFlipped(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  return (
+    <div className="p-4 lg:p-8 space-y-6">
+      <style>{`
+        .perspective-1000 { perspective: 1000px; }
+        .preserve-3d { transform-style: preserve-3d; }
+        .backface-hidden { backface-visibility: hidden; }
+      `}</style>
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Study Flashcards</h2>
+        <Button onClick={() => setIsAdding(true)} className="gap-2">
+          <Plus size={18} /> New Flashcard
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {flashcards.map(card => (
+          <div key={card.id} className="perspective-1000 h-64 relative group">
+            <motion.div 
+              animate={{ rotateY: flipped[card.id] ? 180 : 0 }}
+              transition={{ duration: 0.6, type: "spring", stiffness: 260, damping: 20 }}
+              className="w-full h-full relative preserve-3d cursor-pointer"
+              onClick={() => toggleFlip(card.id)}
+            >
+              {/* Front */}
+              <Card className="absolute inset-0 backface-hidden p-6 flex flex-col items-center justify-center text-center bg-white border-2 border-indigo-100 shadow-lg">
+                <div className="absolute top-4 left-4 p-1.5 bg-indigo-50 text-indigo-600 rounded-md">
+                  <Brain size={16} />
+                </div>
+                <button 
+                  onClick={(e) => { e.stopPropagation(); handleDelete(card.id); }} 
+                  className="absolute top-4 right-4 text-gray-300 hover:text-red-600 transition-colors"
+                >
+                  <Trash2 size={18} />
+                </button>
+                <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-4">Question</p>
+                <p className="text-lg font-bold text-gray-900">{card.front}</p>
+                <p className="text-[10px] text-gray-400 mt-auto">Click to flip</p>
+              </Card>
+
+              {/* Back */}
+              <Card className="absolute inset-0 backface-hidden p-6 flex flex-col items-center justify-center text-center bg-indigo-600 text-white border-2 border-indigo-700 shadow-lg [transform:rotateY(180deg)]">
+                <p className="text-xs font-bold text-white/70 uppercase tracking-widest mb-4">Answer</p>
+                <p className="text-lg font-medium">{card.back}</p>
+                <p className="text-[10px] text-white/50 mt-auto">Click to flip back</p>
+              </Card>
+            </motion.div>
+          </div>
+        ))}
+        {flashcards.length === 0 && (
+          <div className="col-span-full text-center py-20 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
+            <Brain size={48} className="mx-auto text-gray-300 mb-4" />
+            <p className="text-gray-500 font-medium">No flashcards yet.</p>
+            <p className="text-sm text-gray-400">Ask the AI to generate flashcards from your notes or course materials!</p>
+          </div>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {isAdding && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl"
+            >
+              <h3 className="text-xl font-bold mb-6">Create New Flashcard</h3>
+              <form onSubmit={handleAdd} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Course</label>
+                  <Select 
+                    required 
+                    value={newCard.courseId} 
+                    onChange={e => setNewCard({...newCard, courseId: e.target.value})}
+                  >
+                    <option value="">Select Course</option>
+                    {courses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </Select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Front (Question)</label>
+                  <textarea 
+                    required 
+                    className="w-full p-3 border border-gray-200 rounded-xl h-24 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    value={newCard.front} 
+                    onChange={e => setNewCard({...newCard, front: e.target.value})} 
+                    placeholder="What is the question?"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Back (Answer)</label>
+                  <textarea 
+                    required 
+                    className="w-full p-3 border border-gray-200 rounded-xl h-24 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    value={newCard.back} 
+                    onChange={e => setNewCard({...newCard, back: e.target.value})} 
+                    placeholder="What is the answer?"
+                  />
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <Button type="button" variant="outline" className="flex-1" onClick={() => setIsAdding(false)}>Cancel</Button>
+                  <Button type="submit" className="flex-1">Create Card</Button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
 const CoursesPage = () => {
   const { profile } = useAuth();
   const courses = useCollection<Course>('courses');
@@ -1358,6 +2265,7 @@ const CoursesPage = () => {
   const [editingCourse, setEditingCourse] = useState<Partial<Course> | null>(null);
   const [viewingStudentsFor, setViewingStudentsFor] = useState<string | null>(null);
   const [viewingDetailsFor, setViewingDetailsFor] = useState<Course | null>(null);
+  const [editingOutlineFor, setEditingOutlineFor] = useState<Course | null>(null);
   
   // Search and Filter state
   const [searchTerm, setSearchTerm] = useState('');
@@ -1432,8 +2340,8 @@ const CoursesPage = () => {
     const isEnrolled = enrollments.some(e => e.courseId === course.id && e.studentId === profile?.uid);
     const matchesEnrolled = !showOnlyEnrolled || isEnrolled;
 
-    // Lecturers only see their own courses unless they are searching/filtering
-    const isLecturerView = profile?.role === 'lecturer' && course.lecturerId === profile.uid;
+    // Lecturers now have full access to see all courses
+    const isLecturerView = profile?.role === 'lecturer';
     const isAdminOrStudentView = profile?.role === 'admin' || profile?.role === 'student';
     
     return matchesSearch && matchesLecturer && matchesCode && matchesEnrolled && (isAdminOrStudentView || isLecturerView);
@@ -1443,9 +2351,9 @@ const CoursesPage = () => {
     <div className="p-4 lg:p-8 space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <h2 className="text-xl lg:text-2xl font-bold text-gray-900">
-          {profile?.role === 'admin' ? 'Manage Courses' : profile?.role === 'lecturer' ? 'My Courses' : 'Available Courses'}
+          {profile?.role === 'admin' || profile?.role === 'lecturer' ? 'Manage Courses' : 'Available Courses'}
         </h2>
-        {profile?.role === 'admin' && (
+        {(profile?.role === 'admin' || profile?.role === 'lecturer') && (
           <Button onClick={() => { setEditingCourse({}); setIsModalOpen(true); }} className="gap-2" size="sm">
             <Plus size={18} /> <span className="hidden sm:inline">Add Course</span>
           </Button>
@@ -1513,17 +2421,22 @@ const CoursesPage = () => {
                   <Button variant="ghost" size="sm" onClick={() => setViewingDetailsFor(course)}>
                     <Info size={18} className="text-gray-400 hover:text-indigo-600" />
                   </Button>
+                  {(profile?.role === 'admin' || isOwnCourse) && (
+                    <Button variant="ghost" size="sm" onClick={() => setEditingOutlineFor(course)}>
+                      <FileText size={18} className="text-gray-400 hover:text-indigo-600" />
+                    </Button>
+                  )}
                   {isOwnCourse && (
                     <Button variant="ghost" size="sm" onClick={() => setViewingStudentsFor(course.id)}>
                       <Users size={18} className="text-gray-400 hover:text-indigo-600" />
                     </Button>
                   )}
-                  {(profile?.role === 'admin' || isOwnCourse) && (
+                  {(profile?.role === 'admin' || profile?.role === 'lecturer') && (
                     <Button variant="ghost" size="sm" onClick={() => { setEditingCourse(course); setIsModalOpen(true); }}>
                       <Edit size={18} className="text-gray-400 hover:text-indigo-600" />
                     </Button>
                   )}
-                  {profile?.role === 'admin' && (
+                  {(profile?.role === 'admin' || profile?.role === 'lecturer') && (
                     <button onClick={() => handleDelete(course.id)} className="p-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
                       <Trash2 size={18} />
                     </button>
@@ -1620,10 +2533,170 @@ const CoursesPage = () => {
                       </Badge>
                     </div>
                   </div>
+
+                  {viewingDetailsFor.outline && viewingDetailsFor.outline.length > 0 && (
+                    <div className="pt-4">
+                      <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Course Outline</h4>
+                      <div className="space-y-4 max-h-60 overflow-y-auto pr-2">
+                        {viewingDetailsFor.outline.map((module, idx) => (
+                          <div key={module.id} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
+                            <h5 className="font-bold text-gray-900 mb-2">{module.title}</h5>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                <p className="text-xs font-bold text-gray-400 uppercase mb-1">Topics</p>
+                                <ul className="list-disc list-inside text-sm text-gray-600">
+                                  {module.topics.map((t, i) => <li key={i}>{t}</li>)}
+                                </ul>
+                              </div>
+                              <div>
+                                <p className="text-xs font-bold text-gray-400 uppercase mb-1">Recommended Readings</p>
+                                <ul className="list-disc list-inside text-sm text-gray-600">
+                                  {module.readings.map((r, i) => <li key={i}>{r}</li>)}
+                                </ul>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 
                 <div className="mt-8 pt-6 border-t border-gray-100 flex justify-end">
                   <Button onClick={() => setViewingDetailsFor(null)}>Close Details</Button>
+                </div>
+              </Card>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Course Outline Editor Modal */}
+      <AnimatePresence>
+        {editingOutlineFor && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+              <Card className="p-6 lg:p-8">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-bold">Edit Course Outline: {editingOutlineFor.name}</h3>
+                  <button onClick={() => setEditingOutlineFor(null)}><XCircle size={24} /></button>
+                </div>
+
+                <div className="space-y-6">
+                  {(editingOutlineFor.outline || []).map((module, mIdx) => (
+                    <Card key={module.id} className="p-4 bg-gray-50 border-gray-200">
+                      <div className="flex justify-between items-start mb-4">
+                        <Input 
+                          placeholder="Module Title (e.g., Module 1: Introduction)" 
+                          value={module.title}
+                          onChange={e => {
+                            const newOutline = [...(editingOutlineFor.outline || [])];
+                            newOutline[mIdx].title = e.target.value;
+                            setEditingOutlineFor({...editingOutlineFor, outline: newOutline});
+                          }}
+                          className="font-bold text-lg"
+                        />
+                        <Button variant="ghost" size="sm" onClick={() => {
+                          const newOutline = (editingOutlineFor.outline || []).filter((_, i) => i !== mIdx);
+                          setEditingOutlineFor({...editingOutlineFor, outline: newOutline});
+                        }}>
+                          <Trash2 size={18} className="text-red-500" />
+                        </Button>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase mb-2 block">Topics</label>
+                          <div className="space-y-2">
+                            {module.topics.map((topic, tIdx) => (
+                              <div key={tIdx} className="flex gap-2">
+                                <Input 
+                                  value={topic}
+                                  onChange={e => {
+                                    const newOutline = [...(editingOutlineFor.outline || [])];
+                                    newOutline[mIdx].topics[tIdx] = e.target.value;
+                                    setEditingOutlineFor({...editingOutlineFor, outline: newOutline});
+                                  }}
+                                />
+                                <Button variant="ghost" size="sm" onClick={() => {
+                                  const newOutline = [...(editingOutlineFor.outline || [])];
+                                  newOutline[mIdx].topics = newOutline[mIdx].topics.filter((_, i) => i !== tIdx);
+                                  setEditingOutlineFor({...editingOutlineFor, outline: newOutline});
+                                }}>
+                                  <Minus size={14} />
+                                </Button>
+                              </div>
+                            ))}
+                            <Button variant="outline" size="sm" className="w-full border-dashed" onClick={() => {
+                              const newOutline = [...(editingOutlineFor.outline || [])];
+                              newOutline[mIdx].topics.push('');
+                              setEditingOutlineFor({...editingOutlineFor, outline: newOutline});
+                            }}>
+                              <Plus size={14} className="mr-2" /> Add Topic
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase mb-2 block">Recommended Readings</label>
+                          <div className="space-y-2">
+                            {module.readings.map((reading, rIdx) => (
+                              <div key={rIdx} className="flex gap-2">
+                                <Input 
+                                  value={reading}
+                                  onChange={e => {
+                                    const newOutline = [...(editingOutlineFor.outline || [])];
+                                    newOutline[mIdx].readings[rIdx] = e.target.value;
+                                    setEditingOutlineFor({...editingOutlineFor, outline: newOutline});
+                                  }}
+                                />
+                                <Button variant="ghost" size="sm" onClick={() => {
+                                  const newOutline = [...(editingOutlineFor.outline || [])];
+                                  newOutline[mIdx].readings = newOutline[mIdx].readings.filter((_, i) => i !== rIdx);
+                                  setEditingOutlineFor({...editingOutlineFor, outline: newOutline});
+                                }}>
+                                  <Minus size={14} />
+                                </Button>
+                              </div>
+                            ))}
+                            <Button variant="outline" size="sm" className="w-full border-dashed" onClick={() => {
+                              const newOutline = [...(editingOutlineFor.outline || [])];
+                              newOutline[mIdx].readings.push('');
+                              setEditingOutlineFor({...editingOutlineFor, outline: newOutline});
+                            }}>
+                              <Plus size={14} className="mr-2" /> Add Reading
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+
+                  <Button variant="outline" className="w-full border-dashed py-6" onClick={() => {
+                    const newOutline = [...(editingOutlineFor.outline || []), {
+                      id: Math.random().toString(36).substr(2, 9),
+                      title: '',
+                      topics: [''],
+                      readings: ['']
+                    }];
+                    setEditingOutlineFor({...editingOutlineFor, outline: newOutline});
+                  }}>
+                    <Plus size={20} className="mr-2" /> Add New Module
+                  </Button>
+                </div>
+
+                <div className="mt-8 pt-6 border-t flex justify-end gap-3">
+                  <Button variant="outline" onClick={() => setEditingOutlineFor(null)}>Cancel</Button>
+                  <Button onClick={async () => {
+                    if (editingOutlineFor.id) {
+                      try {
+                        await updateDoc(doc(db, 'courses', editingOutlineFor.id), { outline: editingOutlineFor.outline });
+                        setEditingOutlineFor(null);
+                      } catch (err) {
+                        handleFirestoreError(err, OperationType.WRITE, 'courses');
+                      }
+                    }
+                  }}>Save Outline</Button>
                 </div>
               </Card>
             </motion.div>
@@ -1882,7 +2955,7 @@ const StudentsPage = () => {
 
 const LecturersPage = () => {
   const { profile } = useAuth();
-  const lecturers = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'lecturer' && u.isApproved));
+  const lecturers = useCollection<UserProfile>('users', (data) => data.filter(u => u.role === 'lecturer'));
   const courses = useCollection<Course>('courses');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedLecturer, setSelectedLecturer] = useState<UserProfile | null>(null);
@@ -2108,63 +3181,6 @@ const UsersPage = () => {
   );
 };
 
-const ApprovalsPage = () => {
-  const { profile } = useAuth();
-  const pendingUsers = useCollection<UserProfile>('users', (data) => 
-    data.filter(u => u.role === 'lecturer' && u.isApproved === false)
-  );
-
-  const handleApprove = async (uid: string) => {
-    try {
-      await updateDoc(doc(db, 'users', uid), { isApproved: true });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'users');
-    }
-  };
-
-  const handleReject = async (uid: string) => {
-    if (confirm('Reject this lecturer?')) {
-      try {
-        await deleteDoc(doc(db, 'users', uid));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, 'users');
-      }
-    }
-  };
-
-  if (profile?.role !== 'admin') return <div className="p-4 lg:p-8">Access Denied</div>;
-
-  return (
-    <div className="p-4 lg:p-8 space-y-6">
-      <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Lecturer Approvals</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {pendingUsers.map(u => (
-          <Card key={u.uid} className="p-6">
-            <div className="flex items-center gap-4 mb-4">
-              <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xl">
-                {u.name.charAt(0)}
-              </div>
-              <div>
-                <h3 className="font-bold text-gray-900">{u.name}</h3>
-                <p className="text-sm text-gray-500">{u.email}</p>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <Button variant="outline" className="flex-1 text-red-600" onClick={() => handleReject(u.uid)}>Reject</Button>
-              <Button className="flex-1" onClick={() => handleApprove(u.uid)}>Approve</Button>
-            </div>
-          </Card>
-        ))}
-        {pendingUsers.length === 0 && (
-          <div className="col-span-full text-center py-20">
-            <p className="text-gray-500 italic">No pending approvals at the moment.</p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
 const AnalyticsPage = () => {
   const { profile } = useAuth();
   const users = useCollection<UserProfile>('users');
@@ -2378,35 +3394,27 @@ const Dashboard = () => {
   const announcements = useCollection<Announcement>('announcements', (data) => 
     data.filter(ann => ['all', profile?.role || 'student'].includes(ann.targetRole))
   );
-  const timetable = useCollection<TimetableEntry>('timetable');
+  const timetable = useCollection<TimetableEntry>(
+    'timetable', 
+    undefined,
+    profile?.role === 'student' 
+      ? query(collection(db, 'timetable'), where('userId', '==', profile.uid))
+      : undefined
+  );
 
   if (profile?.role === 'student') return <StudentDashboard announcements={announcements} timetable={timetable} />;
-  if (profile?.role === 'lecturer') {
-    if (!profile.isApproved) {
-      return (
-        <div className="p-4 lg:p-8 flex flex-col items-center justify-center min-h-[60vh] text-center">
-          <div className="w-16 h-16 lg:w-20 lg:h-20 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mb-6">
-            <Clock size={32} className="lg:hidden" />
-            <Clock size={40} className="hidden lg:block" />
-          </div>
-          <h2 className="text-xl lg:text-2xl font-bold text-gray-900 mb-2">Approval Pending</h2>
-          <p className="text-sm lg:text-base text-gray-600 max-w-md">
-            Your lecturer account is currently pending approval from the administrator. 
-            Once approved, you will have full access to manage courses, resources, and students.
-          </p>
-          <div className="mt-8 p-4 bg-orange-50 border border-orange-100 rounded-lg text-sm text-orange-700">
-            Current Status: <span className="font-bold">Pending Review</span>
-          </div>
-        </div>
-      );
-    }
-    return <LecturerDashboard announcements={announcements} />;
-  }
+  if (profile?.role === 'lecturer') return <LecturerDashboard announcements={announcements} />;
   if (profile?.role === 'admin') return <AdminDashboard />;
   return null;
 };
 
 const StudentDashboard = ({ announcements, timetable }: { announcements: Announcement[], timetable: TimetableEntry[] }) => {
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const today = days[new Date().getDay()];
+  const nextClass = timetable
+    .filter(e => e.day === today)
+    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''))[0];
+
   return (
     <div className="p-4 lg:p-8 space-y-8">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 lg:gap-6">
@@ -2418,13 +3426,17 @@ const StudentDashboard = ({ announcements, timetable }: { announcements: Announc
             <Badge variant="success">Active</Badge>
           </div>
           <h3 className="text-lg font-semibold mb-1">Next Class</h3>
-          <p className="text-white/80 text-sm">Introduction to Computer Science</p>
-          <div className="mt-4 flex items-center gap-2 text-sm">
-            <Clock size={14} /> 10:00 AM - 12:00 PM
-          </div>
-          <div className="mt-1 flex items-center gap-2 text-sm">
-            <MapPin size={14} /> Room 302, Block B
-          </div>
+          <p className="text-white/80 text-sm">{nextClass?.courseName || 'No classes today'}</p>
+          {nextClass && (
+            <>
+              <div className="mt-4 flex items-center gap-2 text-sm">
+                <Clock size={14} /> {nextClass.startTime} - {nextClass.endTime}
+              </div>
+              <div className="mt-1 flex items-center gap-2 text-sm">
+                <MapPin size={14} /> {nextClass.room}
+              </div>
+            </>
+          )}
         </Card>
 
         <Card className="p-6">
@@ -2620,17 +3632,9 @@ const AdminDashboard = () => {
 
   const stats = {
     users: users.length,
-    pending: users.filter(u => u.role === 'lecturer' && !u.isApproved).length,
-    courses: courses.length
-  };
-  const pendingLecturers = users.filter(u => u.role === 'lecturer' && !u.isApproved).slice(0, 3);
-
-  const handleApprove = async (uid: string) => {
-    try {
-      await updateDoc(doc(db, 'users', uid), { isApproved: true });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'users');
-    }
+    courses: courses.length,
+    students: users.filter(u => u.role === 'student').length,
+    lecturers: users.filter(u => u.role === 'lecturer').length
   };
 
   const data = [
@@ -2649,8 +3653,8 @@ const AdminDashboard = () => {
           <p className="text-2xl font-bold">{stats.users}</p>
         </Card>
         <Card className="p-6">
-          <p className="text-sm text-gray-500 mb-1">Pending Approvals</p>
-          <p className="text-2xl font-bold text-orange-600">{stats.pending}</p>
+          <p className="text-sm text-gray-500 mb-1">Total Students</p>
+          <p className="text-2xl font-bold text-indigo-600">{stats.students}</p>
         </Card>
         <Card className="p-6">
           <p className="text-sm text-gray-500 mb-1">Active Courses</p>
@@ -2680,28 +3684,24 @@ const AdminDashboard = () => {
         </Card>
 
         <Card className="p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold">Pending Lecturer Approvals</h3>
-            <Link to="/approvals" className="text-sm text-indigo-600 hover:underline">View all</Link>
-          </div>
-          <div className="space-y-4">
-            {pendingLecturers.map(u => (
-              <div key={u.uid} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600">
-                    <UserIcon size={18} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium">{u.name}</p>
-                    <p className="text-xs text-gray-500">{u.email}</p>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={() => handleApprove(u.uid)}>Approve</Button>
-                </div>
-              </div>
-            ))}
-            {pendingLecturers.length === 0 && <p className="text-center text-gray-500 py-8">No pending approvals.</p>}
+          <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Link to="/courses" className="p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-center">
+              <BookOpen className="mx-auto mb-2 text-indigo-600" />
+              <p className="text-sm font-medium">Manage Courses</p>
+            </Link>
+            <Link to="/users" className="p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-center">
+              <Users className="mx-auto mb-2 text-purple-600" />
+              <p className="text-sm font-medium">Manage Users</p>
+            </Link>
+            <Link to="/announcements" className="p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-center">
+              <Megaphone className="mx-auto mb-2 text-orange-600" />
+              <p className="text-sm font-medium">New Announcement</p>
+            </Link>
+            <Link to="/settings" className="p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-center">
+              <Settings className="mx-auto mb-2 text-gray-600" />
+              <p className="text-sm font-medium">Settings</p>
+            </Link>
           </div>
         </Card>
       </div>
@@ -2758,15 +3758,16 @@ const AppContent = () => {
             <Route path="/results" element={<ResultsPage />} />
             <Route path="/announcements" element={<AnnouncementsPage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
+            <Route path="/notes" element={<NotesPage />} />
+            <Route path="/flashcards" element={<FlashcardsPage />} />
             <Route path="/users" element={<UsersPage />} />
-            <Route path="/approvals" element={<ApprovalsPage />} />
             <Route path="/analytics" element={<AnalyticsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/dashboard" />} />
           </Routes>
         </div>
         <RoleSwitcher />
-        {profile?.role === 'student' && <AIAssistant />}
+        {profile && <AIAssistant />}
       </main>
     </div>
   );

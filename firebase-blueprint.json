@@ -21,7 +21,20 @@
         "id": { "type": "string" },
         "name": { "type": "string" },
         "code": { "type": "string" },
-        "lecturerId": { "type": "string", "description": "UID of the lecturer" }
+        "lecturerId": { "type": "string", "description": "UID of the lecturer" },
+        "description": { "type": "string" },
+        "outline": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "topics": { "type": "array", "items": { "type": "string" } },
+              "readings": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
       },
       "required": ["id", "name", "code", "lecturerId"]
     },
@@ -121,6 +134,34 @@
         "link": { "type": "string" }
       },
       "required": ["id", "userId", "title", "message", "type", "read", "createdAt"]
+    },
+    "Note": {
+      "title": "Note",
+      "description": "A student's study note.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "courseId", "title", "content", "createdAt"]
+    },
+    "Flashcard": {
+      "title": "Flashcard",
+      "description": "A study flashcard.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "front": { "type": "string" },
+        "back": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "courseId", "front", "back", "createdAt"]
     }
   },
   "firestore": {
@@ -132,6 +173,8 @@
     "/results/{resultId}": { "schema": "Result", "description": "Student results" },
     "/announcements/{announcementId}": { "schema": "Announcement", "description": "Announcements" },
     "/enrollments/{enrollmentId}": { "schema": "Enrollment", "description": "Course enrollments" },
-    "/notifications/{notificationId}": { "schema": "Notification", "description": "User notifications" }
+    "/notifications/{notificationId}": { "schema": "Notification", "description": "User notifications" },
+    "/notes/{noteId}": { "schema": "Note", "description": "Student notes" },
+    "/flashcards/{flashcardId}": { "schema": "Flashcard", "description": "Study flashcards" }
   }
 }

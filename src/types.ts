@@ -8,12 +8,20 @@ export interface UserProfile {
   isApproved?: boolean;
 }
 
+export interface CourseOutlineModule {
+  id: string;
+  title: string;
+  topics: string[];
+  readings: string[];
+}
+
 export interface Course {
   id: string;
   name: string;
   code: string;
   lecturerId: string;
   description?: string;
+  outline?: CourseOutlineModule[];
 }
 
 export interface TimetableEntry {
@@ -77,4 +85,22 @@ export interface AppNotification {
   read: boolean;
   createdAt: string;
   link?: string;
+}
+
+export interface Note {
+  id: string;
+  userId: string;
+  courseId: string;
+  title: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface Flashcard {
+  id: string;
+  userId: string;
+  courseId: string;
+  front: string;
+  back: string;
+  createdAt: string;
 }
